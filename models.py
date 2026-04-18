@@ -73,3 +73,4 @@ class ManagedPropertyListItem(BaseModel):
     status: PropertyStatus
     has_rental: bool
     property_label: str | None = None
+    

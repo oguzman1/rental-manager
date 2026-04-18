@@ -1,9 +1,10 @@
+import os
 import sqlite3
 from models import ManagedPropertyCreate
 
 
 # Nombre del archivo SQLite que guardará los datos localmente.
-DB_NAME = "rental_manager.db"
+DB_NAME = os.getenv("DB_NAME", "rental_manager.db")
 
 
 # Devuelve una conexión a la base SQLite.

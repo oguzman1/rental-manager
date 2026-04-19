@@ -57,3 +57,45 @@ def test_create_managed_property_returns_id():
     assert data["comuna"] == "LA SERENA"
     assert data["has_rental"] is True
     assert data["property_label"] == "depto serena"
+
+def test_rent_adjustments_marks_property_as_requiring_notice():
+    payload = {
+        "property": {
+            "comuna": "CASTRO",
+            "rol": "09999-00001",
+            "address": "GAMBOA ALTO PC TEST",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "999",
+            "property_number": "999",
+            "year": 2025,
+            "fiscal_appraisal": 10000000,
+        },
+        "rental": {
+            "property_label": "test castro rental",
+            "current_rent": 150000,
+            "adjustment_frequency": "annual",
+            "start_date": "2025-01-01",
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    }
+
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    response = client.get(
+        "/rent-adjustments",
+        params={"as_of": "2026-12-15"},
+    )
+
+    assert response.status_code == 200
+
+    adjustments = response.json()
+    test_adjustment = next(
+        item for item in adjustments if item["rol"] == "09999-00001"
+    )
+
+    assert test_adjustment["next_adjustment_date"] == "2027-01-01"
+    assert test_adjustment["adjustment_notice_date"] == "2026-12-01"
+    assert test_adjustment["requires_adjustment_notice"] is True

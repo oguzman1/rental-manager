@@ -73,4 +73,14 @@ class ManagedPropertyListItem(BaseModel):
     status: PropertyStatus
     has_rental: bool
     property_label: str | None = None
+
+class RentAdjustmentItem(BaseModel):
+    id: int
+    rol: str
+    comuna: str
+    property_label: str
+    current_rent: int
+    next_adjustment_date: date
+    adjustment_notice_date: date
+    requires_adjustment_notice: bool
     

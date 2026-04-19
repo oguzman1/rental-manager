@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, Body
-
+from fastapi import Body, FastAPI, HTTPException, Query
+from datetime import date
 import sqlite3
 from db import (
     delete_managed_property,
@@ -7,14 +7,24 @@ from db import (
     insert_managed_property,
     list_managed_properties,
     update_managed_property,
+    list_rentals_for_adjustments
 )
 from models import (
     ErrorResponse,
     ManagedPropertyCreate,
     ManagedPropertyResponse,
     PropertyStatus,
-    ManagedPropertyListItem
+    ManagedPropertyListItem,
+    AdjustmentFrequency,
+    RentAdjustmentItem
 )
+
+from adjustments import (
+    calculate_adjustment_notice_date,
+    calculate_next_adjustment_date,
+)
+
+
 
 
 # Crea la aplicación FastAPI.
@@ -128,6 +138,50 @@ def create_managed_property(
         "has_rental": has_rental,
         "property_label": property_label,
     }
+
+# Endpoint para listar próximos reajustes de arriendo.
+@app.get(
+    "/rent-adjustments",
+    tags=["rent-adjustments"],
+    summary="List upcoming rent adjustments",
+    response_model=list[RentAdjustmentItem],
+)
+def get_rent_adjustments(
+    as_of: date | None = Query(
+        default=None,
+        description="Reference date to evaluate adjustment notices",
+    )
+    ):
+    rentals = list_rentals_for_adjustments()
+    today = as_of or date.today()
+
+    results = []
+
+    for rental in rentals:
+        next_adjustment_date = calculate_next_adjustment_date(
+            start_date=date.fromisoformat(rental["start_date"]),
+            adjustment_frequency=AdjustmentFrequency(rental["adjustment_frequency"]),
+            today=today,
+        )
+
+        adjustment_notice_date = calculate_adjustment_notice_date(
+            next_adjustment_date
+        )
+
+        results.append(
+            {
+                "id": rental["id"],
+                "rol": rental["rol"],
+                "comuna": rental["comuna"],
+                "property_label": rental["property_label"],
+                "current_rent": rental["current_rent"],
+                "next_adjustment_date": next_adjustment_date,
+                "adjustment_notice_date": adjustment_notice_date,
+                "requires_adjustment_notice": today >= adjustment_notice_date,
+            }
+        )
+
+    return results
 
 # Endpoint para actualizar una propiedad gestionada existente.
 @app.put(

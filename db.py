@@ -188,3 +188,38 @@ def delete_managed_property(property_id: int) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
+    
+# Devuelve propiedades con arriendo vigente para calcular reajustes.
+def list_rentals_for_adjustments() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                rol,
+                comuna,
+                property_label,
+                current_rent,
+                adjustment_frequency,
+                start_date
+            FROM managed_properties
+            WHERE property_label IS NOT NULL
+            ORDER BY id DESC
+            """
+        ).fetchall()
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row[0],
+                "rol": row[1],
+                "comuna": row[2],
+                "property_label": row[3],
+                "current_rent": row[4],
+                "adjustment_frequency": row[5],
+                "start_date": row[6],
+            }
+        )
+
+    return results

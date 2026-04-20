@@ -174,12 +174,15 @@ def get_rent_adjustments(
                 "rol": rental["rol"],
                 "comuna": rental["comuna"],
                 "property_label": rental["property_label"],
+                "tenant_name": rental["tenant_name"],
+                "payment_day": rental["payment_day"],
                 "current_rent": rental["current_rent"],
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
                 "requires_adjustment_notice": today >= adjustment_notice_date,
             }
         )
+        
 
     return results
 

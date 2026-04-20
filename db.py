@@ -37,6 +37,22 @@ def init_db():
             )
             """
         )
+
+        # Agrega columnas nuevas si la base ya existía antes de este cambio.
+        existing_columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(managed_properties)").fetchall()
+        ]
+
+        if "tenant_name" not in existing_columns:
+            conn.execute(
+                "ALTER TABLE managed_properties ADD COLUMN tenant_name TEXT"
+            )
+
+        if "payment_day" not in existing_columns:
+            conn.execute(
+                "ALTER TABLE managed_properties ADD COLUMN payment_day INTEGER"
+            )
         conn.commit()
 
 
@@ -49,6 +65,8 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
     start_date = data.rental.start_date.isoformat() if data.rental else None
     notice_days = data.rental.notice_days if data.rental else None
     adjustment_month = data.rental.adjustment_month if data.rental else None
+    tenant_name = data.rental.tenant_name if data.rental else None
+    payment_day = data.rental.payment_day if data.rental else None
 
     try:
         with get_connection() as conn:
@@ -65,13 +83,15 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
                     year,
                     fiscal_appraisal,
                     property_label,
+                    tenant_name,
+                    payment_day,
                     current_rent,
                     adjustment_frequency,
                     start_date,
                     notice_days,
                     adjustment_month
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     data.property.comuna,
@@ -84,6 +104,8 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
                     data.property.year,
                     data.property.fiscal_appraisal,
                     property_label,
+                    tenant_name,
+                    payment_day,
                     current_rent,
                     adjustment_frequency.value if adjustment_frequency else None,
                     start_date,
@@ -101,7 +123,7 @@ def list_managed_properties() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT id, rol, comuna, status, property_label
+            SELECT id, rol, comuna, status, property_label,tenant_name,payment_day
             FROM managed_properties
             ORDER BY id DESC
             """
@@ -117,6 +139,8 @@ def list_managed_properties() -> list[dict]:
                 "status": row[3],
                 "has_rental": row[4] is not None,
                 "property_label": row[4],
+                "tenant_name": row[5],
+                "payment_day": row[6],
             }
         )
 
@@ -131,6 +155,8 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
     start_date = data.rental.start_date.isoformat() if data.rental else None
     notice_days = data.rental.notice_days if data.rental else None
     adjustment_month = data.rental.adjustment_month if data.rental else None
+    tenant_name = data.rental.tenant_name if data.rental else None
+    payment_day = data.rental.payment_day if data.rental else None
 
     try:
         with get_connection() as conn:
@@ -148,6 +174,8 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                     year = ?,
                     fiscal_appraisal = ?,
                     property_label = ?,
+                    tenant_name = ?,
+                    payment_day = ?,
                     current_rent = ?,
                     adjustment_frequency = ?,
                     start_date = ?,
@@ -166,6 +194,8 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                     data.property.year,
                     data.property.fiscal_appraisal,
                     property_label,
+                    tenant_name,
+                    payment_day,
                     current_rent,
                     adjustment_frequency.value if adjustment_frequency else None,
                     start_date,
@@ -199,6 +229,8 @@ def list_rentals_for_adjustments() -> list[dict]:
                 rol,
                 comuna,
                 property_label,
+                tenant_name,
+                payment_day,
                 current_rent,
                 adjustment_frequency,
                 start_date
@@ -212,13 +244,17 @@ def list_rentals_for_adjustments() -> list[dict]:
     for row in rows:
         results.append(
             {
+       
                 "id": row[0],
                 "rol": row[1],
                 "comuna": row[2],
                 "property_label": row[3],
-                "current_rent": row[4],
-                "adjustment_frequency": row[5],
-                "start_date": row[6],
+                "tenant_name": row[4],
+                "payment_day": row[5],
+                "current_rent": row[6],
+                "adjustment_frequency": row[7],
+                "start_date": row[8],
+
             }
         )
 

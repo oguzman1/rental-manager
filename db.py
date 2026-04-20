@@ -255,6 +255,7 @@ def list_rentals_for_adjustments() -> list[dict]:
                 "adjustment_frequency": row[7],
                 "start_date": row[8],
 
+
             }
         )
 

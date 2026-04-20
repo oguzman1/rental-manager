@@ -37,7 +37,9 @@ def test_create_managed_property_returns_id():
             "year": 2016,
             "fiscal_appraisal": 142935366,
         },
-        "rental": {
+            "rental": {
+            "tenant_name": "Test Tenant",
+            "payment_day": 5,
             "property_label": "depto serena",
             "current_rent": 801875,
             "adjustment_frequency": "annual",
@@ -71,7 +73,9 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
             "year": 2025,
             "fiscal_appraisal": 10000000,
         },
-        "rental": {
+     "rental": {
+            "tenant_name": "Test Tenant",
+            "payment_day": 5,
             "property_label": "test castro rental",
             "current_rent": 150000,
             "adjustment_frequency": "annual",
@@ -79,7 +83,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
             "notice_days": 30,
             "adjustment_month": "january",
         },
-    }
+            }
 
     create_response = client.post("/managed-property", json=payload)
     assert create_response.status_code == 200

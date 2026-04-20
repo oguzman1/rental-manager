@@ -31,17 +31,13 @@ class PropertyInfo(BaseModel):
 
 # Modelo para los datos del arriendo vigente.
 class RentalInfo(BaseModel):
+    tenant_name: str
+    payment_day: int = Field(ge=1, le=31)
     property_label: str
-
-    # El arriendo actual debe ser un entero positivo.
     current_rent: int = Field(gt=0)
-
     adjustment_frequency: AdjustmentFrequency
     start_date: date
-
-    # Los días de aviso no pueden ser negativos.
     notice_days: int = Field(ge=0)
-
     adjustment_month: str
 
 
@@ -73,6 +69,8 @@ class ManagedPropertyListItem(BaseModel):
     status: PropertyStatus
     has_rental: bool
     property_label: str | None = None
+    tenant_name: str | None = None
+    payment_day: int | None = None
 
 class RentAdjustmentItem(BaseModel):
     id: int
@@ -83,4 +81,6 @@ class RentAdjustmentItem(BaseModel):
     next_adjustment_date: date
     adjustment_notice_date: date
     requires_adjustment_notice: bool
+    tenant_name: str | None = None
+    payment_day: int | None = None
     

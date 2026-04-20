@@ -21,3 +21,4 @@ def test_calculate_next_semiannual_adjustment_date():
     )
 
     assert result == date(2026, 2, 15)
+

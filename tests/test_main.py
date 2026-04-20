@@ -100,6 +100,55 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
         item for item in adjustments if item["rol"] == "09999-00001"
     )
 
+    assert test_adjustment["tenant_name"] == "Test Tenant"
+    assert test_adjustment["payment_day"] == 5
     assert test_adjustment["next_adjustment_date"] == "2027-01-01"
     assert test_adjustment["adjustment_notice_date"] == "2026-12-01"
     assert test_adjustment["requires_adjustment_notice"] is True
+
+def test_list_managed_properties_includes_tenant_and_payment_day():
+    payload = {
+        "property": {
+            "comuna": "TEMUCO",
+            "rol": "08888-00002",
+            "address": "A. BELLO 248 DEPTO 302",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "166",
+            "property_number": "199",
+            "year": 2013,
+            "fiscal_appraisal": 69177846,
+        },
+        "rental": {
+            "tenant_name": "Test Tenant Temuco",
+            "payment_day": 10,
+            "property_label": "depto temuco test",
+            "current_rent": 400000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    }
+
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    list_response = client.get("/managed-properties")
+    assert list_response.status_code == 200
+
+    properties = list_response.json()
+    created_property = next(
+        item for item in properties if item["rol"] == "08888-00002"
+    )
+
+    assert created_property["tenant_name"] == "Test Tenant Temuco"
+    assert created_property["payment_day"] == 10
+
+    properties = list_response.json()
+    created_property = next(
+        item for item in properties if item["rol"] == "08888-00002"
+    )
+
+    assert created_property["tenant_name"] == "Test Tenant Temuco"
+    assert created_property["payment_day"] == 10

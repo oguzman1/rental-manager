@@ -75,9 +75,10 @@ def get_managed_properties():
     },
 )
 def create_managed_property(
-    data: ManagedPropertyCreate = Body(
-        ...,
-        example={
+data: ManagedPropertyCreate = Body(
+    ...,
+    examples=[
+        {
             "property": {
                 "comuna": "LA SERENA",
                 "rol": "02162-00036",
@@ -90,6 +91,8 @@ def create_managed_property(
                 "fiscal_appraisal": 142935366,
             },
             "rental": {
+                "tenant_name": "Arrendatario La Serena",
+                "payment_day": 5,
                 "property_label": "depto serena",
                 "current_rent": 801875,
                 "adjustment_frequency": "annual",
@@ -97,8 +100,9 @@ def create_managed_property(
                 "notice_days": 60,
                 "adjustment_month": "march",
             },
-        },
-    )
+        }
+    ],
+)
 ):
     # Regla: si está ocupada, debe traer datos de arriendo.
     if data.property.status == PropertyStatus.occupied and data.rental is None:

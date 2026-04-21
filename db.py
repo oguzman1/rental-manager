@@ -260,3 +260,43 @@ def list_rentals_for_adjustments() -> list[dict]:
         )
 
     return results
+
+# Devuelve datos base para construir el dashboard operativo.
+def list_dashboard_items() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                rol,
+                comuna,
+                status,
+                property_label,
+                tenant_name,
+                payment_day,
+                current_rent,
+                adjustment_frequency,
+                start_date
+            FROM managed_properties
+            ORDER BY id DESC
+            """
+        ).fetchall()
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row[0],
+                "rol": row[1],
+                "comuna": row[2],
+                "status": row[3],
+                "property_label": row[4],
+                "tenant_name": row[5],
+                "payment_day": row[6],
+                "current_rent": row[7],
+                "adjustment_frequency": row[8],
+                "start_date": row[9],
+            }
+        )
+
+    return results

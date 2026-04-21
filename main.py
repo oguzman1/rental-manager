@@ -5,18 +5,20 @@ from db import (
     delete_managed_property,
     init_db,
     insert_managed_property,
+    list_dashboard_items,
     list_managed_properties,
+    list_rentals_for_adjustments,
     update_managed_property,
-    list_rentals_for_adjustments
 )
 from models import (
+    AdjustmentFrequency,
+    DashboardItem,
     ErrorResponse,
     ManagedPropertyCreate,
+    ManagedPropertyListItem,
     ManagedPropertyResponse,
     PropertyStatus,
-    ManagedPropertyListItem,
-    AdjustmentFrequency,
-    RentAdjustmentItem
+    RentAdjustmentItem,
 )
 
 from adjustments import (
@@ -48,6 +50,57 @@ def health():
 )
 def get_managed_properties():
     return list_managed_properties()
+
+# Endpoint para mostrar una vista operativa consolidada.
+@app.get(
+    "/dashboard",
+    tags=["dashboard"],
+    summary="Get operational dashboard",
+    response_model=list[DashboardItem],
+)
+def get_dashboard():
+    items = list_dashboard_items()
+    today = date.today()
+
+    results = []
+
+    for item in items:
+        next_adjustment_date = None
+        adjustment_notice_date = None
+        requires_adjustment_notice = False
+
+        if item["adjustment_frequency"] and item["start_date"]:
+            next_adjustment_date = calculate_next_adjustment_date(
+                start_date=date.fromisoformat(item["start_date"]),
+                adjustment_frequency=AdjustmentFrequency(
+                    item["adjustment_frequency"]
+                ),
+                today=today,
+            )
+
+            adjustment_notice_date = calculate_adjustment_notice_date(
+                next_adjustment_date
+            )
+
+            requires_adjustment_notice = today >= adjustment_notice_date
+
+        results.append(
+            {
+                "id": item["id"],
+                "rol": item["rol"],
+                "comuna": item["comuna"],
+                "status": item["status"],
+                "property_label": item["property_label"],
+                "tenant_name": item["tenant_name"],
+                "payment_day": item["payment_day"],
+                "current_rent": item["current_rent"],
+                "next_adjustment_date": next_adjustment_date,
+                "adjustment_notice_date": adjustment_notice_date,
+                "requires_adjustment_notice": requires_adjustment_notice,
+            }
+        )
+
+    return results
 
 # Endpoint para recibir una propiedad gestionada y devolver una respuesta clara.
 @app.post(

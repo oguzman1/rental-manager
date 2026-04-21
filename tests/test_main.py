@@ -152,3 +152,92 @@ def test_list_managed_properties_includes_tenant_and_payment_day():
 
     assert created_property["tenant_name"] == "Test Tenant Temuco"
     assert created_property["payment_day"] == 10
+
+def test_dashboard_includes_operational_fields():
+        payload = {
+            "property": {
+                "comuna": "LAS CONDES",
+                "rol": "07777-00003",
+                "address": "TEST LAS CONDES",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "777",
+                "property_number": "777",
+                "year": 2020,
+                "fiscal_appraisal": 120000000,
+        },
+        "rental": {
+            "tenant_name": "Test Tenant Dashboard",
+            "payment_day": 5,
+            "property_label": "depto dashboard test",
+            "current_rent": 650000,
+            "adjustment_frequency": "annual",
+            "start_date": "2024-04-01",
+            "notice_days": 60,
+            "adjustment_month": "april",
+        },
+    }
+
+        create_response = client.post("/managed-property", json=payload)
+        assert create_response.status_code == 200
+
+        dashboard_response = client.get("/dashboard")
+        assert dashboard_response.status_code == 200
+
+        dashboard_items = dashboard_response.json()
+        dashboard_item = next(
+            item for item in dashboard_items if item["rol"] == "07777-00003"
+        )
+
+        assert dashboard_item["tenant_name"] == "Test Tenant Dashboard"
+        assert dashboard_item["payment_day"] == 5
+        assert dashboard_item["current_rent"] == 650000
+        assert dashboard_item["property_label"] == "depto dashboard test"
+        assert "next_adjustment_date" in dashboard_item
+        assert "adjustment_notice_date" in dashboard_item
+        assert "requires_adjustment_notice" in dashboard_item
+
+
+def test_dashboard_includes_operational_fields():
+    payload = {
+        "property": {
+            "comuna": "LAS CONDES",
+            "rol": "07777-00003",
+            "address": "TEST LAS CONDES",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "777",
+            "property_number": "777",
+            "year": 2020,
+            "fiscal_appraisal": 120000000,
+        },
+        "rental": {
+            "tenant_name": "Test Tenant Dashboard",
+            "payment_day": 5,
+            "property_label": "depto dashboard test",
+            "current_rent": 650000,
+            "adjustment_frequency": "annual",
+            "start_date": "2024-04-01",
+            "notice_days": 60,
+            "adjustment_month": "april",
+        },
+    }
+
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    dashboard_response = client.get("/dashboard")
+    assert dashboard_response.status_code == 200
+
+    dashboard_items = dashboard_response.json()
+    dashboard_item = next(
+        item for item in dashboard_items if item["rol"] == "07777-00003"
+    )
+
+    assert dashboard_item["tenant_name"] == "Test Tenant Dashboard"
+    assert dashboard_item["payment_day"] == 5
+    assert dashboard_item["current_rent"] == 650000
+    assert dashboard_item["property_label"] == "depto dashboard test"
+    assert "next_adjustment_date" in dashboard_item
+    assert "adjustment_notice_date" in dashboard_item
+    assert "requires_adjustment_notice" in dashboard_item

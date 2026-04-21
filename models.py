@@ -83,4 +83,17 @@ class RentAdjustmentItem(BaseModel):
     requires_adjustment_notice: bool
     tenant_name: str | None = None
     payment_day: int | None = None
-    
+
+# Modelo para mostrar una vista operativa consolidada de propiedades y arriendos.
+class DashboardItem(BaseModel):
+    id: int
+    rol: str
+    comuna: str
+    status: PropertyStatus
+    property_label: str | None = None
+    tenant_name: str | None = None
+    payment_day: int | None = None
+    current_rent: int | None = None
+    next_adjustment_date: date | None = None
+    adjustment_notice_date: date | None = None
+    requires_adjustment_notice: bool = False

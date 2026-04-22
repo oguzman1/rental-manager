@@ -1,0 +1,23 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px;
+  font-family: system-ui, sans-serif;
+}
+
+.dashboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 24px;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+  border: 1px solid #ddd;
+  padding: 10px;
+  text-align: left;
+}
+
+.dashboard-table th {
+  background: #f4f4f4;
+}

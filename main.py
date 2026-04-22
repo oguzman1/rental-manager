@@ -25,12 +25,23 @@ from adjustments import (
     calculate_adjustment_notice_date,
     calculate_next_adjustment_date,
 )
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
 
 # Crea la aplicación FastAPI.
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Inicializa la base al cargar la aplicación.
 init_db()

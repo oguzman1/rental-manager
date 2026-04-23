@@ -21,3 +21,48 @@
 .dashboard-table th {
   background: #f4f4f4;
 }
+
+.dashboard-summary {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 24px 0;
+}
+
+.summary-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 24px;
+  min-width: 160px;
+  text-align: center;
+}
+
+.summary-label {
+  font-size: 14px;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.summary-value {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0;
+}
+
+.dashboard-filters {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.results-count {
+  font-size: 14px;
+  color: var(--text);
+  margin: 8px 0 20px;
+  text-align: center;
+}

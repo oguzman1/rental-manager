@@ -10,3 +10,69 @@ __pycache__/
 
 # Config local de VS Code
 .vscode/
+
+# =========================
+# Python / local runtime
+# =========================
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+venv/
+
+# =========================
+# Frontend build / deps
+# =========================
+frontend/node_modules/
+frontend/dist/
+
+# =========================
+# Local databases
+# =========================
+*.db
+*.sqlite
+*.sqlite3
+
+# =========================
+# Private data / seeds
+# =========================
+data/real_properties_seed.json
+data/*.local.json
+data/private/
+data/contracts/
+data/uploads/
+data/exports/
+data/backups/
+
+# =========================
+# Private documents
+# =========================
+contracts/
+private/
+uploads/
+exports/
+backups/
+
+# PDFs / docs that may contain sensitive info
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.csv
+
+# =========================
+# Claude / local AI tooling
+# =========================
+.claude/
+
+# =========================
+# OS / editor junk
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+data/*.local.json
+data/real_properties_seed.json

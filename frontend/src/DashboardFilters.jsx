@@ -6,37 +6,66 @@ function DashboardFilters({
   searchText,
   setSearchText,
   onClear,
+  resultCount,
+  totalCount,
 }) {
+  const hasActiveFilters =
+    statusFilter !== 'all' || adjustmentFilter !== 'all' || searchText !== ''
+
   return (
-    <div className="dashboard-filters">
-      <label>
-        Estado:{' '}
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="all">Todos</option>
-          <option value="occupied">Arrendadas</option>
-          <option value="vacant">Vacías</option>
-        </select>
-      </label>
-
-      <label>
-        Aviso de reajuste:{' '}
-        <select value={adjustmentFilter} onChange={(e) => setAdjustmentFilter(e.target.value)}>
-          <option value="all">Todos</option>
-          <option value="notice_required">Solo requieren aviso</option>
-        </select>
-      </label>
-
-      <label>
-        Buscar:{' '}
-        <input
-          type="text"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          placeholder="Rol o comuna..."
+    <div className="table-filters">
+      <div className="filter-chips">
+        <FilterChip
+          label="Estado"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { value: 'all',      label: 'Todos' },
+            { value: 'occupied', label: 'Arrendadas' },
+            { value: 'vacant',   label: 'Vacantes' },
+          ]}
         />
-      </label>
+        <FilterChip
+          label="Aviso"
+          value={adjustmentFilter}
+          onChange={setAdjustmentFilter}
+          options={[
+            { value: 'all',    label: 'Todos' },
+            { value: 'notice', label: 'Solo con aviso' },
+          ]}
+        />
+        <div className="search-input-wrap">
+          <input
+            type="text"
+            placeholder="Buscar rol, comuna, propiedad…"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+          />
+        </div>
+        {hasActiveFilters && (
+          <button className="btn-ghost" onClick={onClear}>
+            Limpiar
+          </button>
+        )}
+      </div>
+      <span className="filters-count">
+        {resultCount} / {totalCount}
+      </span>
+    </div>
+  )
+}
 
-      <button onClick={onClear}>Limpiar filtros</button>
+function FilterChip({ label, value, onChange, options }) {
+  return (
+    <div className="filter-chip">
+      <span className="filter-chip-label">{label}:</span>
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }

@@ -7,10 +7,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import db
-from models import ManagedPropertyCreate
 
 DB_PATH = ROOT / os.getenv("DB_NAME", "rental_manager.db")
-SEED_PATH = ROOT / "data" / "real_properties_seed.json"
+SEED_PATH = ROOT / "data" / "real_properties_seed.local.json"
 
 
 def main():
@@ -26,25 +25,105 @@ def main():
 
     inserted = 0
     for entry in entries:
-        data = ManagedPropertyCreate.model_validate(entry)
+        prop = entry["property"]
+        contracts = entry.get("contracts", [])
+
         try:
-            property_id = db.insert_managed_property(data)
+            with db.get_connection() as conn:
+                # 1. Insert property
+                cursor = conn.execute(
+                    """
+                    INSERT INTO properties
+                        (user_id, display_name, rol, comuna, address, destination, status,
+                         fojas, property_number, year, fiscal_appraisal)
+                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        prop["display_name"],
+                        prop["rol"],
+                        prop["comuna"],
+                        prop["address"],
+                        prop["destination"],
+                        prop["status"],
+                        prop.get("fojas"),
+                        prop.get("property_number"),
+                        prop.get("year"),
+                        prop.get("fiscal_appraisal"),
+                    ),
+                )
+                property_id = cursor.lastrowid
 
-            # Properties without rental can still carry a property_label in the
-            # JSON. ManagedPropertyCreate ignores it, so we patch it via SQL.
-            if data.rental is None and (pl := entry.get("property_label")):
-                with db.get_connection() as conn:
-                    conn.execute(
-                        "UPDATE managed_properties SET property_label = ? WHERE id = ?",
-                        (pl, property_id),
+                for contract_entry in contracts:
+                    c = contract_entry["contract"]
+
+                    # 2. Insert contract
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO contracts
+                            (property_id, start_date, end_date, payment_day, notice_days,
+                             adjustment_frequency, adjustment_month, is_active, comment,
+                             contract_file_name, contract_file_path, contract_signed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            property_id,
+                            c["start_date"],
+                            c.get("end_date"),
+                            c["payment_day"],
+                            c["notice_days"],
+                            c["adjustment_frequency"],
+                            c.get("adjustment_month"),
+                            1 if c["is_active"] else 0,
+                            c.get("comment"),
+                            c.get("contract_file_name"),
+                            c.get("contract_file_path"),
+                            c.get("contract_signed_at"),
+                        ),
                     )
-                    conn.commit()
+                    contract_id = cursor.lastrowid
 
-            label = f"  [{data.property.status.value}] {data.property.rol} — {data.property.comuna}"
-            print(f"✓ (id={property_id}){label}")
+                    # 3. Insert tenants and contract_tenants
+                    for tenant in contract_entry["tenants"]:
+                        cursor = conn.execute(
+                            "INSERT INTO tenants (display_name) VALUES (?)",
+                            (tenant["display_name"],),
+                        )
+                        tenant_id = cursor.lastrowid
+
+                        conn.execute(
+                            """
+                            INSERT INTO contract_tenants (contract_id, tenant_id, is_primary)
+                            VALUES (?, ?, ?)
+                            """,
+                            (contract_id, tenant_id, 1 if tenant["is_primary"] else 0),
+                        )
+
+                    # 4. Insert rent_changes (effective_from must be explicit in seed)
+                    for rc in contract_entry["rent_changes"]:
+                        conn.execute(
+                            """
+                            INSERT INTO rent_changes
+                                (contract_id, effective_from, amount, adjustment_pct, comment)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                contract_id,
+                                rc["effective_from"],
+                                rc["amount"],
+                                rc.get("adjustment_pct"),
+                                rc.get("comment"),
+                            ),
+                        )
+
+                conn.commit()
+
+            n = len(contracts)
+            label = f"[{prop['status']}] {prop['rol']} — {prop['comuna']} ({n} contrato{'s' if n != 1 else ''})"
+            print(f"✓ {label}")
             inserted += 1
+
         except Exception as e:
-            print(f"✗ {data.property.rol} — {e}")
+            print(f"✗ {prop['rol']} — {e}")
 
     print(f"\n{inserted} de {len(entries)} propiedades insertadas.")
 

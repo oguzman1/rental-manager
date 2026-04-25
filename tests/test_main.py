@@ -241,3 +241,33 @@ def test_dashboard_includes_operational_fields():
     assert "next_adjustment_date" in dashboard_item
     assert "adjustment_notice_date" in dashboard_item
     assert "requires_adjustment_notice" in dashboard_item
+
+
+def test_dashboard_no_contract_property_has_null_rent_fields():
+    payload = {
+        "property": {
+            "comuna": "CASTRO",
+            "rol": "06666-00001",
+            "address": "Gamboa Alto PC-TEST",
+            "destination": "SITIO ERIAZO",
+            "status": "vacant",
+            "fojas": "959",
+            "property_number": "905",
+            "year": 2025,
+            "fiscal_appraisal": 36641671,
+        },
+        "rental": None,
+    }
+
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    dashboard_response = client.get("/dashboard")
+    assert dashboard_response.status_code == 200
+
+    items = dashboard_response.json()
+    item = next(i for i in items if i["rol"] == "06666-00001")
+
+    assert item["current_rent"] is None
+    assert item["tenant_name"] is None
+    assert item["payment_day"] is None

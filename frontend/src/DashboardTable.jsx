@@ -1,6 +1,18 @@
 import { useState } from 'react'
 import DashboardRow from './DashboardRow'
 
+const COLUMNS = [
+  { key: 'rol',                  label: 'Rol' },
+  { key: 'comuna',               label: 'Comuna' },
+  { key: null,                   label: 'Estado' },
+  { key: 'property_label',       label: 'Propiedad' },
+  { key: 'tenant_name',          label: 'Arrendatario' },
+  { key: 'payment_day',          label: 'Día pago',       align: 'center' },
+  { key: 'current_rent',         label: 'Renta',          align: 'right' },
+  { key: 'next_adjustment_date', label: 'Próx. reajuste' },
+  { key: null,                   label: 'Aviso' },
+]
+
 function compareValues(a, b, direction) {
   if (a === null || a === undefined) return 1
   if (b === null || b === undefined) return -1
@@ -9,53 +21,65 @@ function compareValues(a, b, direction) {
   return 0
 }
 
-function DashboardTable({ properties }) {
+function DashboardTable({ properties, onRowClick }) {
   const [sortColumn, setSortColumn] = useState(null)
   const [sortDirection, setSortDirection] = useState('asc')
 
-  function handleSort(column) {
-    if (sortColumn === column) {
+  function handleSort(key) {
+    if (!key) return
+    if (sortColumn === key) {
       setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))
     } else {
-      setSortColumn(column)
+      setSortColumn(key)
       setSortDirection('asc')
     }
   }
 
-  const sortedProperties = sortColumn
+  const sorted = sortColumn
     ? [...properties].sort((a, b) =>
         compareValues(a[sortColumn], b[sortColumn], sortDirection)
       )
     : properties
 
-  function indicator(column) {
-    if (sortColumn !== column) return null
-    return <span className="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-  }
-
   return (
-    <table className="dashboard-table">
-      <thead>
-        <tr>
-          <th className="col-sortable" onClick={() => handleSort('rol')}>Rol {indicator('rol')}</th>
-          <th className="col-sortable" onClick={() => handleSort('comuna')}>Comuna {indicator('comuna')}</th>
-          <th className="col-sortable" onClick={() => handleSort('status')}>Estado {indicator('status')}</th>
-          <th>Propiedad/arriendo</th>
-          <th>Arrendatario</th>
-          <th>Día de pago</th>
-          <th className="col-sortable" onClick={() => handleSort('current_rent')}>Arriendo actual {indicator('current_rent')}</th>
-          <th className="col-sortable" onClick={() => handleSort('next_adjustment_date')}>Próximo reajuste {indicator('next_adjustment_date')}</th>
-          <th>Aviso reajuste</th>
-          <th>Requiere aviso</th>
-        </tr>
-      </thead>
-
-      <tbody>
-        {sortedProperties.map((property) => (
-          <DashboardRow key={property.id} property={property} />
-        ))}
-      </tbody>
-    </table>
+    <div className="table-wrapper">
+      <table className="dashboard-table">
+        <thead>
+          <tr>
+            {COLUMNS.map((col, i) => {
+              const isActive = col.key && sortColumn === col.key
+              const alignClass = col.align ? ` th-${col.align}` : ''
+              const activeClass = isActive ? ' th-active' : ''
+              return (
+                <th
+                  key={i}
+                  className={`th${alignClass}${activeClass}`}
+                  onClick={() => handleSort(col.key)}
+                  style={{ cursor: col.key ? 'pointer' : 'default' }}
+                >
+                  {col.label}
+                  {isActive && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+                </th>
+              )
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((property) => (
+            <DashboardRow
+              key={property.id}
+              property={property}
+              onClick={() => onRowClick && onRowClick(property)}
+            />
+          ))}
+        </tbody>
+      </table>
+      <div className="table-footer">
+        <span>
+          {sorted.length} de {properties.length} propiedades
+        </span>
+      </div>
+    </div>
   )
 }
 

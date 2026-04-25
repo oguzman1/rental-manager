@@ -1,20 +1,32 @@
-function DashboardRow({ property }) {
+import { StatusBadge, NoticeBadge } from './Badge'
+import { formatCLP, daysUntil } from './utils'
+
+function DashboardRow({ property, onClick }) {
+  const days = daysUntil(property.adjustment_notice_date)
+
   return (
-    <tr>
-      <td>{property.rol}</td>
-      <td>{property.comuna}</td>
-      <td>{property.status}</td>
-      <td>{property.property_label ?? '-'}</td>
-      <td>{property.tenant_name ?? '-'}</td>
-      <td>{property.payment_day ?? '-'}</td>
-      <td>
-        {property.current_rent
-          ? `$${property.current_rent.toLocaleString('es-CL')}`
-          : '-'}
+    <tr className="table-row" onClick={onClick}>
+      <td className="td td-mono">{property.rol}</td>
+      <td className="td td-muted">{property.comuna}</td>
+      <td className="td">
+        <StatusBadge status={property.status} />
       </td>
-      <td>{property.next_adjustment_date ?? '-'}</td>
-      <td>{property.adjustment_notice_date ?? '-'}</td>
-      <td>{property.requires_adjustment_notice ? 'Sí' : 'No'}</td>
+      <td className="td">{property.property_label ?? <span className="text-muted">—</span>}</td>
+      <td className="td">{property.tenant_name ?? <span className="text-muted">—</span>}</td>
+      <td className="td td-center td-mono">
+        {property.payment_day ?? <span className="text-muted">—</span>}
+      </td>
+      <td className="td td-right td-mono">{formatCLP(property.current_rent)}</td>
+      <td className="td td-mono td-muted">
+        {property.next_adjustment_date ?? <span className="text-muted">—</span>}
+      </td>
+      <td className="td">
+        {property.requires_adjustment_notice ? (
+          <NoticeBadge daysUntilNotice={days} />
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+      </td>
     </tr>
   )
 }

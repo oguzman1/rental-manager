@@ -83,6 +83,9 @@ class RentAdjustmentItem(BaseModel):
     requires_adjustment_notice: bool
     tenant_name: str | None = None
     payment_day: int | None = None
+    last_adjustment_date: date | None = None
+    months_since_last_adjustment: int | None = None
+    months_until_next_adjustment: int | None = None
 
 # Modelo para mostrar una vista operativa consolidada de propiedades y arriendos.
 class DashboardItem(BaseModel):
@@ -97,3 +100,35 @@ class DashboardItem(BaseModel):
     next_adjustment_date: date | None = None
     adjustment_notice_date: date | None = None
     requires_adjustment_notice: bool = False
+    start_date: date | None = None
+    adjustment_frequency: str | None = None
+    last_adjustment_date: date | None = None
+    months_since_last_adjustment: int | None = None
+
+
+class ContractListItem(BaseModel):
+    id: int
+    property_id: int
+    rol: str
+    property_label: str | None = None
+    tenant_name: str | None = None
+    start_date: date | None = None
+    payment_day: int | None = None
+    adjustment_frequency: str | None = None
+    adjustment_month: str | None = None
+    current_rent: int | None = None
+
+
+class TenantListItem(BaseModel):
+    id: int
+    display_name: str
+    property_id: int | None = None
+    rol: str | None = None
+    property_label: str | None = None
+    payment_day: int | None = None
+    start_date: date | None = None
+    current_rent: int | None = None
+    last_adjustment_date: date | None = None
+    months_since_last_adjustment: int | None = None
+    tenancy_months: int | None = None
+    tenancy_years: int | None = None

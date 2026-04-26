@@ -393,3 +393,147 @@ def test_dashboard_no_contract_property_has_null_rent_fields():
     assert item["current_rent"] is None
     assert item["tenant_name"] is None
     assert item["payment_day"] is None
+
+
+# ---------------------------------------------------------------------------
+# Payment tests
+# ---------------------------------------------------------------------------
+
+import sqlite3 as _sqlite3
+
+_PAYMENT_ROL = "09001-00001"
+
+_PAYMENT_PROPERTY = {
+    "property": {
+        "comuna": "SANTIAGO",
+        "rol": _PAYMENT_ROL,
+        "address": "Av. Siempre Viva 742",
+        "destination": "HABITACIONAL",
+        "status": "occupied",
+        "fojas": "1",
+        "property_number": "1",
+        "year": 2020,
+        "fiscal_appraisal": 100000000,
+    },
+    "rental": {
+        "tenant_name": "Arrendatario Pagos",
+        "payment_day": 5,
+        "property_label": "depto pagos",
+        "current_rent": 500000,
+        "adjustment_frequency": "annual",
+        "start_date": "2023-01-01",
+        "notice_days": 60,
+        "adjustment_month": "january",
+    },
+}
+
+
+def _get_contract_id_for_rol(rol: str) -> int:
+    """Query the test DB directly to get the active contract_id for a property rol."""
+    conn = _sqlite3.connect("test_rental_manager.db")
+    row = conn.execute(
+        """
+        SELECT c.id FROM contracts c
+        JOIN properties p ON p.id = c.property_id
+        WHERE p.rol = ? AND c.is_active = 1
+        """,
+        (rol,),
+    ).fetchone()
+    conn.close()
+    assert row is not None, f"No active contract found for rol {rol}"
+    return row[0]
+
+
+def _create_payment_property() -> int:
+    """Creates the test property (idempotent) and returns its contract_id."""
+    r = client.post("/managed-property", json=_PAYMENT_PROPERTY)
+    assert r.status_code in (200, 409)
+    return _get_contract_id_for_rol(_PAYMENT_ROL)
+
+
+def test_create_payment_returns_pending_record():
+    cid = _create_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-01", "due_date": "2025-01-05"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["contract_id"] == cid
+    assert body["period"] == "2025-01"
+    assert body["status"] == "pending"
+    assert body["expected_amount"] == 500000
+    assert body["paid_amount"] is None
+    assert body["source"] == "manual"
+
+
+def test_list_payments_for_contract():
+    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
+    r = client.get(f"/contracts/{cid}/payments")
+    assert r.status_code == 200
+    items = r.json()
+    assert any(p["period"] == "2025-01" for p in items)
+
+
+def test_patch_payment_full_amount_marks_paid():
+    # The first payment created for this contract has id=1.
+    r = client.patch(
+        "/payments/1",
+        json={"paid_amount": 500000, "paid_at": "2025-01-05"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["paid_amount"] == 500000
+
+
+def test_patch_payment_partial_amount_marks_partial():
+    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
+    client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-02", "due_date": "2025-02-05"},
+    )
+    r = client.patch("/payments/2", json={"paid_amount": 250000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    assert body["paid_amount"] == 250000
+
+
+def test_patch_payment_comment_only_leaves_status_unchanged():
+    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
+    client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-03", "due_date": "2025-03-05"},
+    )
+    r = client.patch("/payments/3", json={"comment": "pendiente verificación"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "pending"
+    assert body["comment"] == "pendiente verificación"
+
+
+def test_create_payment_duplicate_period_returns_409():
+    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-01", "due_date": "2025-01-05"},
+    )
+    assert r.status_code == 409
+
+
+def test_create_payment_nonexistent_contract_returns_404():
+    r = client.post(
+        "/contracts/99999/payments",
+        json={"period": "2025-01", "due_date": "2025-01-05"},
+    )
+    assert r.status_code == 404
+
+
+def test_create_payment_inactive_contract_returns_404():
+    # Try a contract id that does not exist → 404.
+    r = client.post(
+        "/contracts/99998/payments",
+        json={"period": "2025-04", "due_date": "2025-04-05"},
+    )
+    assert r.status_code == 404

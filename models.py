@@ -100,6 +100,47 @@ class DashboardItem(BaseModel):
     next_adjustment_date: date | None = None
     adjustment_notice_date: date | None = None
     requires_adjustment_notice: bool = False
+
+
+# Catálogo de estados posibles para un pago.
+class PaymentStatus(str, Enum):
+    pending = "pending"
+    partial = "partial"
+    paid = "paid"
+
+
+# Catálogo de orígenes de un pago (sólo manual por ahora).
+class PaymentSource(str, Enum):
+    manual = "manual"
+
+
+# Modelo de entrada para crear un pago manual.
+class PaymentCreate(BaseModel):
+    period: str   # "YYYY-MM"
+    due_date: date
+    comment: str | None = None
+
+
+# Modelo de entrada para actualizar un pago.
+class PaymentUpdate(BaseModel):
+    paid_amount: int | None = None
+    paid_at: date | None = None
+    comment: str | None = None
+
+
+# Modelo de salida para un pago.
+class PaymentResponse(BaseModel):
+    id: int
+    contract_id: int
+    period: str
+    due_date: date
+    expected_amount: int
+    paid_amount: int | None = None
+    paid_at: date | None = None
+    status: PaymentStatus
+    source: PaymentSource
+    comment: str | None = None
+    created_at: date
     start_date: date | None = None
     adjustment_frequency: str | None = None
     last_adjustment_date: date | None = None

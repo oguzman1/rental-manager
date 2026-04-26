@@ -462,7 +462,8 @@ def list_dashboard_items() -> list[dict]:
                 rc.amount               AS current_rent,
                 c.adjustment_frequency,
                 c.start_date,
-                rc.effective_from       AS last_adjustment_date
+                rc.effective_from       AS last_adjustment_date,
+                cp.status               AS current_payment_status
             FROM properties p
             LEFT JOIN contracts c
                    ON c.property_id = p.id AND c.is_active = 1
@@ -472,6 +473,12 @@ def list_dashboard_items() -> list[dict]:
                    ON t.id = ct.tenant_id
             LEFT JOIN rent_changes rc
                    ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            LEFT JOIN (
+                SELECT   contract_id, status
+                FROM     payments
+                WHERE    period = strftime('%Y-%m', 'now')
+                GROUP BY contract_id
+            ) cp ON c.id = cp.contract_id
             ORDER BY p.id DESC
             """
         ).fetchall()
@@ -491,6 +498,7 @@ def list_dashboard_items() -> list[dict]:
                 "adjustment_frequency": row[8],
                 "start_date": row[9],
                 "last_adjustment_date": row[10],
+                "current_payment_status": row[11],
             }
         )
     return results

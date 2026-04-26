@@ -439,3 +439,123 @@ def test_dashboard_no_contract_property_has_null_rent_fields():
     assert item["current_rent"] is None
     assert item["tenant_name"] is None
     assert item["payment_day"] is None
+
+
+def test_dashboard_current_payment_status_none_when_no_payment():
+    import datetime
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09001-00001",
+            "address": "TEST VALDIVIA 1",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "901",
+            "property_number": "901",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Payment None",
+            "payment_day": 10,
+            "property_label": "depto pago none",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    client.post("/managed-property", json=payload)
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09001-00001")
+
+    assert item["current_payment_status"] is None
+
+
+def test_dashboard_current_payment_status_pending():
+    import datetime
+    current_period = datetime.date.today().strftime("%Y-%m")
+
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09002-00001",
+            "address": "TEST VALDIVIA 2",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "902",
+            "property_number": "902",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Payment Pending",
+            "payment_day": 10,
+            "property_label": "depto pago pending",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    client.post("/managed-property", json=payload)
+
+    contracts = client.get("/contracts").json()
+    contract = next(c for c in contracts if c["rol"] == "09002-00001")
+    client.post(
+        f"/contracts/{contract['id']}/payments",
+        json={"period": current_period},
+    )
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09002-00001")
+
+    assert item["current_payment_status"] == "pending"
+
+
+def test_dashboard_current_payment_status_paid():
+    import datetime
+    current_period = datetime.date.today().strftime("%Y-%m")
+
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09003-00001",
+            "address": "TEST VALDIVIA 3",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "903",
+            "property_number": "903",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Payment Paid",
+            "payment_day": 10,
+            "property_label": "depto pago paid",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    client.post("/managed-property", json=payload)
+
+    contracts = client.get("/contracts").json()
+    contract = next(c for c in contracts if c["rol"] == "09003-00001")
+    create_resp = client.post(
+        f"/contracts/{contract['id']}/payments",
+        json={"period": current_period},
+    )
+    payment_id = create_resp.json()["id"]
+    expected = create_resp.json()["expected_amount"]
+    client.patch(f"/payments/{payment_id}", json={"paid_amount": expected})
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09003-00001")
+
+    assert item["current_payment_status"] == "paid"

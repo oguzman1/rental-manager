@@ -17,6 +17,13 @@ class AdjustmentFrequency(str, Enum):
     semiannual = "semiannual"
 
 
+# Catálogo de estados posibles para un pago.
+class PaymentStatus(str, Enum):
+    pending = "pending"
+    paid    = "paid"
+    partial = "partial"
+
+
 # Modelo base para los datos de inventario de una propiedad.
 class PropertyInfo(BaseModel):
     comuna: str
@@ -105,6 +112,7 @@ class DashboardItem(BaseModel):
     adjustment_frequency: str | None = None
     last_adjustment_date: str | None = None
     months_since_last_adjustment: int | None = None
+    current_payment_status: PaymentStatus | None = None
 
 
 class ContractListItem(BaseModel):
@@ -128,12 +136,6 @@ class TenantListItem(BaseModel):
     start_date: str | None = None
     current_rent: int | None = None
     payment_day: int | None = None
-
-
-class PaymentStatus(str, Enum):
-    pending = "pending"
-    paid = "paid"
-    partial = "partial"
 
 
 class PaymentSource(str, Enum):

@@ -1,5 +1,5 @@
 import Topbar from './Topbar'
-import { StatusBadge } from './Badge'
+import { StatusBadge, PaymentBadge } from './Badge'
 import { formatCLP, formatFrequency } from './utils'
 
 function PropertyDetail({ property: p, onBack }) {
@@ -45,6 +45,10 @@ function PropertyDetail({ property: p, onBack }) {
                   <KVRow
                     label="Día de pago"
                     value={p.payment_day ? `${p.payment_day} de cada mes` : '—'}
+                  />
+                  <KVRow
+                    label="Estado pago actual"
+                    value={<PaymentBadge status={p.current_payment_status} />}
                   />
                   <KVRow
                     label="Frecuencia reajuste"

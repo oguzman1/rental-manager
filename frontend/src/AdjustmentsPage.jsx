@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { NoticeBadge } from './Badge'
-import { formatCLP, daysUntil } from './utils'
+import { formatCLP, daysUntil, formatMonthsAgo, formatMonthsUntil } from './utils'
 
 const API_URL = 'http://127.0.0.1:8000/rent-adjustments'
 
@@ -42,7 +42,7 @@ function AdjustmentsPage({ onPropertySelect }) {
                     <th className="th">Arrendatario</th>
                     <th className="th th-right">Renta</th>
                     <th className="th">Próx. reajuste</th>
-                    <th className="th">Aviso notif.</th>
+                    <th className="th">Últ. reajuste</th>
                     <th className="th">Estado</th>
                   </tr>
                 </thead>
@@ -62,10 +62,18 @@ function AdjustmentsPage({ onPropertySelect }) {
                       </td>
                       <td className="td td-right td-mono">{formatCLP(item.current_rent)}</td>
                       <td className="td td-mono td-muted">
-                        {item.next_adjustment_date ?? '—'}
+                        <div>{item.next_adjustment_date}</div>
+                        <div className="td-sub">
+                          {formatMonthsUntil(item.months_until_next_adjustment)}
+                        </div>
                       </td>
                       <td className="td td-mono td-muted">
-                        {item.adjustment_notice_date ?? '—'}
+                        <div>{item.last_adjustment_date ?? '—'}</div>
+                        {item.last_adjustment_date && (
+                          <div className="td-sub">
+                            {formatMonthsAgo(item.months_since_last_adjustment)}
+                          </div>
+                        )}
                       </td>
                       <td className="td">
                         <NoticeBadge

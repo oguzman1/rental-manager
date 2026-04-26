@@ -1,6 +1,6 @@
 import Topbar from './Topbar'
 import { StatusBadge, PaymentBadge } from './Badge'
-import { formatCLP, formatFrequency } from './utils'
+import { formatCLP, formatFrequency, formatMonthsAgo } from './utils'
 
 function PropertyDetail({ property: p, onBack }) {
   const isOccupied = p.status === 'occupied'
@@ -19,7 +19,6 @@ function PropertyDetail({ property: p, onBack }) {
       <div className="property-detail-scroll">
         <div className="property-detail-grid">
           <div>
-            {/* Header card */}
             <div className="detail-card">
               <div className="detail-status-row">
                 <StatusBadge status={p.status} />
@@ -31,17 +30,12 @@ function PropertyDetail({ property: p, onBack }) {
               </div>
             </div>
 
-            {/* Contract card */}
             {isOccupied ? (
               <div className="detail-card">
                 <div className="detail-card-title">Contrato activo</div>
                 <div className="kv-list">
                   <KVRow label="Arrendatario" value={p.tenant_name ?? '—'} />
-                  <KVRow
-                    label="Inicio contrato"
-                    value={p.start_date ?? '—'}
-                    mono
-                  />
+                  <KVRow label="Inicio contrato" value={p.start_date ?? '—'} mono />
                   <KVRow
                     label="Día de pago"
                     value={p.payment_day ? `${p.payment_day} de cada mes` : '—'}
@@ -53,6 +47,20 @@ function PropertyDetail({ property: p, onBack }) {
                   <KVRow
                     label="Frecuencia reajuste"
                     value={formatFrequency(p.adjustment_frequency)}
+                  />
+                  <KVRow
+                    label="Último reajuste"
+                    value={p.last_adjustment_date ?? '—'}
+                    mono
+                  />
+                  <KVRow
+                    label="Meses desde reajuste"
+                    value={
+                      p.months_since_last_adjustment !== null &&
+                      p.months_since_last_adjustment !== undefined
+                        ? formatMonthsAgo(p.months_since_last_adjustment)
+                        : 'Sin reajustes aún'
+                    }
                   />
                   <KVRow
                     label="Próximo reajuste"
@@ -77,7 +85,6 @@ function PropertyDetail({ property: p, onBack }) {
             )}
           </div>
 
-          {/* Right sidebar */}
           <div>
             <div className="detail-card">
               <div className="detail-card-label">Renta mensual</div>

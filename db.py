@@ -25,7 +25,6 @@ def init_db():
             """
         )
 
-        # Default user required by the legacy write mapping (user_id = 1).
         conn.execute(
             """
             INSERT OR IGNORE INTO users (id, email, full_name)
@@ -136,34 +135,6 @@ def init_db():
         conn.commit()
 
 
-# ---------------------------------------------------------------------------
-# Legacy write mapping
-#
-# The public API still accepts ManagedPropertyCreate (flat property + rental).
-# Internally this maps to the normalized schema:
-#
-#   property  → properties row
-#              (display_name = rental.property_label if rental else property.rol)
-#   rental    → contracts row       (non-rent fields)
-#             → contract_tenants row (is_primary = 1)
-#             → tenants row          (display_name = rental.tenant_name)
-#             → rent_changes row     (amount = rental.current_rent,
-#                                     effective_from = rental.start_date)
-#
-# update_managed_property applies changes surgically:
-#   a) property fields  → UPDATE properties directly
-#   b) contract fields  → UPDATE the existing active contract (no new contract)
-#   c) tenant name      → UPDATE tenants.display_name in place
-#
-# Rent history is intentionally NOT updated by the legacy endpoint.
-# New rent_changes rows must come from the seed (with a real effective_from)
-# or from an explicit future action with a known effective date.
-# Using date.today() as effective_from would introduce fabricated history.
-#
-# Creating a new contract via the legacy endpoint is intentionally unsupported.
-# ---------------------------------------------------------------------------
-
-
 def insert_managed_property(data: ManagedPropertyCreate) -> int:
     display_name = data.rental.property_label if data.rental else data.property.rol
 
@@ -229,7 +200,11 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
                     INSERT INTO rent_changes (contract_id, effective_from, amount)
                     VALUES (?, ?, ?)
                     """,
-                    (contract_id, data.rental.start_date.isoformat(), data.rental.current_rent),
+                    (
+                        contract_id,
+                        data.rental.start_date.isoformat(),
+                        data.rental.current_rent,
+                    ),
                 )
 
             conn.commit()
@@ -242,7 +217,6 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
 def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bool:
     try:
         with get_connection() as conn:
-            # a) Update property fields directly.
             cursor = conn.execute(
                 """
                 UPDATE properties
@@ -276,7 +250,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                 if row:
                     contract_id = row[0]
 
-                    # b) Update active contract fields — no new contract is created.
                     conn.execute(
                         """
                         UPDATE contracts
@@ -293,7 +266,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                         ),
                     )
 
-                    # Update primary tenant name in place.
                     tenant_row = conn.execute(
                         """
                         SELECT tenant_id FROM contract_tenants
@@ -308,7 +280,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                             (data.rental.tenant_name, tenant_row[0]),
                         )
 
-                # Sync display_name with property_label if it changed.
                 conn.execute(
                     "UPDATE properties SET display_name = ? WHERE id = ?",
                     (data.rental.property_label, property_id),
@@ -333,26 +304,25 @@ def delete_managed_property(property_id: int) -> bool:
             conn.execute("DELETE FROM contract_tenants WHERE contract_id = ?", (cid,))
 
         conn.execute("DELETE FROM contracts WHERE property_id = ?", (property_id,))
-
         cursor = conn.execute("DELETE FROM properties WHERE id = ?", (property_id,))
         conn.commit()
         return cursor.rowcount > 0
 
 
-# ---------------------------------------------------------------------------
-# Read queries
-#
-# All functions return the same dict shapes as before so main.py and the
-# response models require no changes.
-#
-# The subquery below selects the single latest rent_change per contract,
-# breaking ties by effective_from DESC then id DESC.
-# ---------------------------------------------------------------------------
-
 _LATEST_RENT = """
     (
         SELECT id FROM rent_changes
         WHERE  contract_id = c.id
+        ORDER  BY effective_from DESC, id DESC
+        LIMIT  1
+    )
+"""
+
+_LATEST_ADJUSTMENT = """
+    (
+        SELECT effective_from FROM rent_changes
+        WHERE  contract_id = c.id
+        AND    effective_from > c.start_date
         ORDER  BY effective_from DESC, id DESC
         LIMIT  1
     )
@@ -383,21 +353,19 @@ def list_managed_properties() -> list[dict]:
             """
         ).fetchall()
 
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "status": row[3],
-                "property_label": row[4],
-                "tenant_name": row[5],
-                "payment_day": row[6],
-                "has_rental": bool(row[7]),
-            }
-        )
-    return results
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "status": row[3],
+            "property_label": row[4],
+            "tenant_name": row[5],
+            "payment_day": row[6],
+            "has_rental": bool(row[7]),
+        }
+        for row in rows
+    ]
 
 
 def list_rentals_for_adjustments() -> list[dict]:
@@ -414,7 +382,7 @@ def list_rentals_for_adjustments() -> list[dict]:
                 rc.amount               AS current_rent,
                 c.adjustment_frequency,
                 c.start_date,
-                rc.effective_from       AS last_adjustment_date
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
             FROM properties p
             JOIN contracts c
                 ON c.property_id = p.id AND c.is_active = 1
@@ -428,268 +396,18 @@ def list_rentals_for_adjustments() -> list[dict]:
             """
         ).fetchall()
 
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "property_label": row[3],
-                "tenant_name": row[4],
-                "payment_day": row[5],
-                "current_rent": row[6],
-                "adjustment_frequency": row[7],
-                "start_date": row[8],
-                "last_adjustment_date": row[9],
-            }
-        )
-    return results
-
-
-def list_dashboard_items() -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT
-                p.id,
-                p.rol,
-                p.comuna,
-                p.status,
-                p.display_name          AS property_label,
-                t.display_name          AS tenant_name,
-                c.payment_day,
-                rc.amount               AS current_rent,
-                c.adjustment_frequency,
-                c.start_date,
-                rc.effective_from       AS last_adjustment_date,
-                cp.status               AS current_payment_status
-            FROM properties p
-            LEFT JOIN contracts c
-                   ON c.property_id = p.id AND c.is_active = 1
-            LEFT JOIN contract_tenants ct
-                   ON ct.contract_id = c.id AND ct.is_primary = 1
-            LEFT JOIN tenants t
-                   ON t.id = ct.tenant_id
-            LEFT JOIN rent_changes rc
-                   ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
-            LEFT JOIN (
-                SELECT   contract_id, status
-                FROM     payments
-                WHERE    period = strftime('%Y-%m', 'now')
-                GROUP BY contract_id
-            ) cp ON c.id = cp.contract_id
-            ORDER BY p.id DESC
-            """
-        ).fetchall()
-
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "status": row[3],
-                "property_label": row[4],
-                "tenant_name": row[5],
-                "payment_day": row[6],
-                "current_rent": row[7],
-                "adjustment_frequency": row[8],
-                "start_date": row[9],
-                "last_adjustment_date": row[10],
-                "current_payment_status": row[11],
-            }
-        )
-    return results
-
-
-def list_contracts() -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT
-                c.id,
-                c.property_id,
-                p.display_name  AS property_label,
-                p.rol,
-                t.display_name  AS tenant_name,
-                c.start_date,
-                rc.amount       AS current_rent,
-                c.payment_day,
-                c.adjustment_frequency
-            FROM contracts c
-            JOIN properties p
-                ON p.id = c.property_id
-            LEFT JOIN contract_tenants ct
-                ON ct.contract_id = c.id AND ct.is_primary = 1
-            LEFT JOIN tenants t
-                ON t.id = ct.tenant_id
-            JOIN rent_changes rc
-                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
-            WHERE c.is_active = 1
-            ORDER BY p.rol ASC
-            """
-        ).fetchall()
-
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "property_id": row[1],
-                "property_label": row[2],
-                "rol": row[3],
-                "tenant_name": row[4],
-                "start_date": row[5],
-                "current_rent": row[6],
-                "payment_day": row[7],
-                "adjustment_frequency": row[8],
-            }
-        )
-    return results
-
-
-def list_tenants() -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT
-                t.id,
-                c.property_id,
-                t.display_name,
-                p.display_name  AS property_label,
-                p.rol,
-                c.start_date,
-                rc.amount       AS current_rent,
-                c.payment_day
-            FROM tenants t
-            JOIN contract_tenants ct
-                ON ct.tenant_id = t.id AND ct.is_primary = 1
-            JOIN contracts c
-                ON c.id = ct.contract_id AND c.is_active = 1
-            JOIN properties p
-                ON p.id = c.property_id
-            JOIN rent_changes rc
-                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
-            ORDER BY t.display_name ASC
-            """
-        ).fetchall()
-
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "property_id": row[1],
-                "display_name": row[2],
-                "property_label": row[3],
-                "rol": row[4],
-                "start_date": row[5],
-                "current_rent": row[6],
-                "payment_day": row[7],
-            }
-        )
-    return results
-
-
-def get_contract_for_payment(contract_id: int) -> dict | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            f"""
-            SELECT c.id, c.property_id, c.payment_day, rc.amount AS current_rent
-            FROM contracts c
-            JOIN rent_changes rc
-                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
-            WHERE c.id = ? AND c.is_active = 1
-            """,
-            (contract_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    return {
-        "id": row[0],
-        "property_id": row[1],
-        "payment_day": row[2],
-        "current_rent": row[3],
-    }
-
-
-def _payment_row_to_dict(row) -> dict:
-    return {
-        "id": row[0],
-        "contract_id": row[1],
-        "period": row[2],
-        "due_date": row[3],
-        "expected_amount": row[4],
-        "paid_amount": row[5],
-        "paid_at": row[6],
-        "status": row[7],
-        "source": row[8],
-        "comment": row[9],
-        "created_at": row[10],
-    }
-
-
-def insert_payment(
-    contract_id: int,
-    period: str,
-    due_date: str,
-    expected_amount: int,
-    comment: str | None = None,
-) -> dict:
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO payments (contract_id, period, due_date, expected_amount, comment)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (contract_id, period, due_date, expected_amount, comment),
-        )
-        payment_id = cursor.lastrowid
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM payments WHERE id = ?", (payment_id,)
-        ).fetchone()
-    return _payment_row_to_dict(row)
-
-
-def list_payments_for_contract(contract_id: int) -> list[dict]:
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM payments WHERE contract_id = ? ORDER BY period DESC",
-            (contract_id,),
-        ).fetchall()
-    return [_payment_row_to_dict(row) for row in rows]
-
-
-def get_payment(payment_id: int) -> dict | None:
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM payments WHERE id = ?", (payment_id,)
-        ).fetchone()
-    return _payment_row_to_dict(row) if row else None
-
-
-def delete_payment(payment_id: int) -> bool:
-    with get_connection() as conn:
-        cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-
-
-def update_payment(payment_id: int, updates: dict) -> dict | None:
-    allowed = {"paid_amount", "paid_at", "status", "comment"}
-    with get_connection() as conn:
-        for field, value in updates.items():
-            if field not in allowed:
-                continue
-            conn.execute(
-                f"UPDATE payments SET {field} = ? WHERE id = ?",
-                (value, payment_id),
-            )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM payments WHERE id = ?", (payment_id,)
-        ).fetchone()
-    return _payment_row_to_dict(row) if row else None
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "property_label": row[3],
+            "tenant_name": row[4],
+            "payment_day": row[5],
+            "current_rent": row[6],
+            "adjustment_frequency": row[7],
+            "start_date": row[8],
+            "last_adjustment_date": row[9],
+        }
+        for row in rows
+    ]

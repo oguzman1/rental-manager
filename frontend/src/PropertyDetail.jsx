@@ -1,5 +1,5 @@
 import Topbar from './Topbar'
-import { StatusBadge } from './Badge'
+import { StatusBadge, PaymentBadge } from './Badge'
 import { formatCLP, formatFrequency, formatMonthsAgo } from './utils'
 
 function PropertyDetail({ property: p, onBack }) {
@@ -19,7 +19,6 @@ function PropertyDetail({ property: p, onBack }) {
       <div className="property-detail-scroll">
         <div className="property-detail-grid">
           <div>
-            {/* Header card */}
             <div className="detail-card">
               <div className="detail-status-row">
                 <StatusBadge status={p.status} />
@@ -31,20 +30,19 @@ function PropertyDetail({ property: p, onBack }) {
               </div>
             </div>
 
-            {/* Contract card */}
             {isOccupied ? (
               <div className="detail-card">
                 <div className="detail-card-title">Contrato activo</div>
                 <div className="kv-list">
                   <KVRow label="Arrendatario" value={p.tenant_name ?? '—'} />
-                  <KVRow
-                    label="Inicio contrato"
-                    value={p.start_date ?? '—'}
-                    mono
-                  />
+                  <KVRow label="Inicio contrato" value={p.start_date ?? '—'} mono />
                   <KVRow
                     label="Día de pago"
                     value={p.payment_day ? `${p.payment_day} de cada mes` : '—'}
+                  />
+                  <KVRow
+                    label="Estado pago actual"
+                    value={<PaymentBadge status={p.current_payment_status} />}
                   />
                   <KVRow
                     label="Frecuencia reajuste"
@@ -87,7 +85,6 @@ function PropertyDetail({ property: p, onBack }) {
             )}
           </div>
 
-          {/* Right sidebar */}
           <div>
             <div className="detail-card">
               <div className="detail-card-label">Renta mensual</div>

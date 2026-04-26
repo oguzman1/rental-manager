@@ -15,6 +15,12 @@ class AdjustmentFrequency(str, Enum):
     semiannual = "semiannual"
 
 
+class PaymentStatus(str, Enum):
+    pending = "pending"
+    partial = "partial"
+    paid = "paid"
+
+
 class PropertyInfo(BaseModel):
     comuna: str
     rol: str
@@ -99,6 +105,7 @@ class DashboardItem(BaseModel):
     adjustment_frequency: AdjustmentFrequency | None = None
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
+    current_payment_status: PaymentStatus | None = None
 
 
 class ContractListItem(BaseModel):
@@ -126,12 +133,6 @@ class TenantListItem(BaseModel):
     months_since_last_adjustment: int | None = None
     tenancy_months: int | None = None
     tenancy_years: int | None = None
-
-
-class PaymentStatus(str, Enum):
-    pending = "pending"
-    partial = "partial"
-    paid = "paid"
 
 
 class PaymentSource(str, Enum):

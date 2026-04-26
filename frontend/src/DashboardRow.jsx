@@ -1,4 +1,4 @@
-import { StatusBadge, NoticeBadge } from './Badge'
+import { StatusBadge, NoticeBadge, PaymentBadge } from './Badge'
 import { formatCLP, daysUntil } from './utils'
 
 function DashboardRow({ property, onClick }) {
@@ -10,6 +10,9 @@ function DashboardRow({ property, onClick }) {
       <td className="td td-muted">{property.comuna}</td>
       <td className="td">
         <StatusBadge status={property.status} />
+      </td>
+      <td className="td">
+        <PaymentBadge status={property.current_payment_status} />
       </td>
       <td className="td">{property.property_label ?? <span className="text-muted">—</span>}</td>
       <td className="td">

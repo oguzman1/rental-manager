@@ -5,6 +5,7 @@ const COLUMNS = [
   { key: 'rol',                  label: 'Rol' },
   { key: 'comuna',               label: 'Comuna' },
   { key: null,                   label: 'Estado' },
+  { key: null,                   label: 'Pago' },
   { key: 'property_label',       label: 'Propiedad' },
   { key: 'tenant_name',          label: 'Arrendatario' },
   { key: 'payment_day',          label: 'Día pago',       align: 'center' },

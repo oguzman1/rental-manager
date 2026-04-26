@@ -1,4 +1,5 @@
 export function PaymentBadge({ status }) {
+  if (!status) return <span className="text-muted">—</span>
   if (status === 'paid') {
     return (
       <span className="badge badge-ok">
@@ -16,7 +17,7 @@ export function PaymentBadge({ status }) {
     )
   }
   return (
-    <span className="badge badge-muted">
+    <span className="badge badge-danger">
       <span className="badge-dot" />
       Pendiente
     </span>

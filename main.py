@@ -131,6 +131,7 @@ def get_dashboard():
                 "adjustment_frequency": item["adjustment_frequency"],
                 "last_adjustment_date": last_adjustment_date,
                 "months_since_last_adjustment": months_since_last,
+                "current_payment_status": item.get("current_payment_status"),
             }
         )
 

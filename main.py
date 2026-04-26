@@ -1,7 +1,16 @@
 from calendar import monthrange
-from fastapi import Body, FastAPI, HTTPException, Query, Response
 from datetime import date
 import sqlite3
+
+from fastapi import Body, FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
+
+from adjustments import (
+    calculate_adjustment_notice_date,
+    calculate_due_adjustment_date,
+    calculate_next_adjustment_date,
+    months_between,
+)
 from db import (
     delete_managed_property,
     delete_payment,
@@ -35,16 +44,13 @@ from models import (
     TenantListItem,
 )
 
-from adjustments import (
-    calculate_adjustment_notice_date,
-    calculate_next_adjustment_date,
-)
-from fastapi.middleware.cors import CORSMiddleware
+
+def _derive_due_date(period: str, payment_day: int) -> date:
+    year, month = int(period[:4]), int(period[5:7])
+    last_day = monthrange(year, month)[1]
+    return date(year, month, min(payment_day, last_day))
 
 
-
-
-# Crea la aplicación FastAPI.
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -57,16 +63,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializa la base al cargar la aplicación.
 init_db()
 
 
-# Endpoint simple para comprobar que la API está viva.
 @app.get("/health", tags=["system"])
 def health():
     return {"status": "ok"}
 
-# Endpoint para listar propiedades guardadas.
+
 @app.get(
     "/managed-properties",
     tags=["managed-properties"],
@@ -76,7 +80,7 @@ def health():
 def get_managed_properties():
     return list_managed_properties()
 
-# Endpoint para mostrar una vista operativa consolidada.
+
 @app.get(
     "/dashboard",
     tags=["dashboard"],
@@ -86,7 +90,6 @@ def get_managed_properties():
 def get_dashboard():
     items = list_dashboard_items()
     today = date.today()
-
     results = []
 
     for item in items:
@@ -94,27 +97,22 @@ def get_dashboard():
         adjustment_notice_date = None
         requires_adjustment_notice = False
 
+        last_adj_str = item["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
+        )
+
         if item["adjustment_frequency"] and item["start_date"]:
             next_adjustment_date = calculate_next_adjustment_date(
                 start_date=date.fromisoformat(item["start_date"]),
-                adjustment_frequency=AdjustmentFrequency(
-                    item["adjustment_frequency"]
-                ),
+                adjustment_frequency=AdjustmentFrequency(item["adjustment_frequency"]),
                 today=today,
             )
-
             adjustment_notice_date = calculate_adjustment_notice_date(
                 next_adjustment_date
             )
-
             requires_adjustment_notice = today >= adjustment_notice_date
-
-        last_adjustment_date = item.get("last_adjustment_date")
-        months_since_last_adjustment = None
-        if last_adjustment_date:
-            months_since_last_adjustment = _months_between(
-                date.fromisoformat(last_adjustment_date), today
-            )
 
         results.append(
             {
@@ -129,16 +127,16 @@ def get_dashboard():
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
                 "requires_adjustment_notice": requires_adjustment_notice,
-                "start_date": item.get("start_date"),
-                "adjustment_frequency": item.get("adjustment_frequency"),
+                "start_date": item["start_date"],
+                "adjustment_frequency": item["adjustment_frequency"],
                 "last_adjustment_date": last_adjustment_date,
-                "months_since_last_adjustment": months_since_last_adjustment,
+                "months_since_last_adjustment": months_since_last,
             }
         )
 
     return results
 
-# Endpoint para recibir una propiedad gestionada y devolver una respuesta clara.
+
 @app.post(
     "/managed-property",
     tags=["managed-properties"],
@@ -164,65 +162,58 @@ def get_dashboard():
     },
 )
 def create_managed_property(
-data: ManagedPropertyCreate = Body(
-    ...,
-    examples=[
-        {
-            "property": {
-                "comuna": "LA SERENA",
-                "rol": "02162-00036",
-                "address": "BALMACEDA EDIF 1 4095",
-                "destination": "HABITACIONAL",
-                "status": "occupied",
-                "fojas": "2933",
-                "property_number": "2121",
-                "year": 2016,
-                "fiscal_appraisal": 142935366,
-            },
-            "rental": {
-                "tenant_name": "Arrendatario La Serena",
-                "payment_day": 5,
-                "property_label": "depto serena",
-                "current_rent": 801875,
-                "adjustment_frequency": "annual",
-                "start_date": "2022-03-12",
-                "notice_days": 60,
-                "adjustment_month": "march",
-            },
-        }
-    ],
-)
+    data: ManagedPropertyCreate = Body(
+        ...,
+        examples=[
+            {
+                "property": {
+                    "comuna": "LA SERENA",
+                    "rol": "02162-00036",
+                    "address": "BALMACEDA EDIF 1 4095",
+                    "destination": "HABITACIONAL",
+                    "status": "occupied",
+                    "fojas": "2933",
+                    "property_number": "2121",
+                    "year": 2016,
+                    "fiscal_appraisal": 142935366,
+                },
+                "rental": {
+                    "tenant_name": "Arrendatario La Serena",
+                    "payment_day": 5,
+                    "property_label": "depto serena",
+                    "current_rent": 801875,
+                    "adjustment_frequency": "annual",
+                    "start_date": "2022-03-12",
+                    "notice_days": 60,
+                    "adjustment_month": "march",
+                },
+            }
+        ],
+    )
 ):
-    # Regla: si está ocupada, debe traer datos de arriendo.
     if data.property.status == PropertyStatus.occupied and data.rental is None:
         raise HTTPException(
             status_code=400,
-            detail="Occupied properties must include rental data."
+            detail="Occupied properties must include rental data.",
         )
 
-    # Regla: si está vacante, no debe traer datos de arriendo.
     if data.property.status == PropertyStatus.vacant and data.rental is not None:
         raise HTTPException(
             status_code=400,
-            detail="Vacant properties cannot include rental data."
+            detail="Vacant properties cannot include rental data.",
         )
 
-    # Evalúa si el input viene con datos de arriendo.
     has_rental = data.rental is not None
-
-    # Si hay rental, toma el label; si no, deja None.
     property_label = data.rental.property_label if has_rental else None
 
-    # Guarda la propiedad en la base y obtiene el id creado.
     try:
         new_id = insert_managed_property(data)
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409,
-            detail="A property with this rol already exists."
+            detail="A property with this rol already exists.",
         )
 
-    # Devuelve una respuesta validada por el response_model.
     return {
         "id": new_id,
         "message": "managed property saved successfully",
@@ -232,7 +223,7 @@ data: ManagedPropertyCreate = Body(
         "property_label": property_label,
     }
 
-# Endpoint para listar próximos reajustes de arriendo.
+
 @app.get(
     "/rent-adjustments",
     tags=["rent-adjustments"],
@@ -244,29 +235,34 @@ def get_rent_adjustments(
         default=None,
         description="Reference date to evaluate adjustment notices",
     )
-    ):
+):
     rentals = list_rentals_for_adjustments()
     today = as_of or date.today()
-
     results = []
 
     for rental in rentals:
+        start = date.fromisoformat(rental["start_date"])
+        freq = AdjustmentFrequency(rental["adjustment_frequency"])
+
         next_adjustment_date = calculate_next_adjustment_date(
-            start_date=date.fromisoformat(rental["start_date"]),
-            adjustment_frequency=AdjustmentFrequency(rental["adjustment_frequency"]),
+            start_date=start,
+            adjustment_frequency=freq,
             today=today,
         )
+        adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
 
-        adjustment_notice_date = calculate_adjustment_notice_date(
-            next_adjustment_date
+        due_date = calculate_due_adjustment_date(
+            start_date=start,
+            adjustment_frequency=freq,
+            today=today,
         )
+        months_until_next = months_between(today, due_date)
 
-        last_adjustment_date = rental.get("last_adjustment_date")
-        months_since_last_adjustment = None
-        if last_adjustment_date:
-            months_since_last_adjustment = _months_between(
-                date.fromisoformat(last_adjustment_date), today
-            )
+        last_adj_str = rental["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
+        )
 
         results.append(
             {
@@ -281,14 +277,14 @@ def get_rent_adjustments(
                 "adjustment_notice_date": adjustment_notice_date,
                 "requires_adjustment_notice": today >= adjustment_notice_date,
                 "last_adjustment_date": last_adjustment_date,
-                "months_since_last_adjustment": months_since_last_adjustment,
-                "months_until_next_adjustment": _months_between(today, next_adjustment_date),
+                "months_since_last_adjustment": months_since_last,
+                "months_until_next_adjustment": months_until_next,
             }
         )
 
     return results
 
-# Endpoint para actualizar una propiedad gestionada existente.
+
 @app.put(
     "/managed-property/{property_id}",
     tags=["managed-properties"],
@@ -318,40 +314,33 @@ def update_managed_property_endpoint(
     property_id: int,
     data: ManagedPropertyCreate = Body(...),
 ):
-    # Regla: si está ocupada, debe traer datos de arriendo.
     if data.property.status == PropertyStatus.occupied and data.rental is None:
         raise HTTPException(
             status_code=400,
-            detail="Occupied properties must include rental data."
+            detail="Occupied properties must include rental data.",
         )
 
-    # Regla: si está vacante, no debe traer datos de arriendo.
     if data.property.status == PropertyStatus.vacant and data.rental is not None:
         raise HTTPException(
             status_code=400,
-            detail="Vacant properties cannot include rental data."
+            detail="Vacant properties cannot include rental data.",
         )
 
-    # Evalúa si el input viene con datos de arriendo.
     has_rental = data.rental is not None
-
-    # Si hay rental, toma el label; si no, deja None.
     property_label = data.rental.property_label if has_rental else None
 
-    # Intenta actualizar la propiedad en la base.
     try:
         updated = update_managed_property(property_id, data)
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409,
-            detail="A property with this rol already exists."
+            detail="A property with this rol already exists.",
         )
 
-    # Si no encontró la fila, devuelve 404.
     if not updated:
         raise HTTPException(
             status_code=404,
-            detail="Managed property not found."
+            detail="Managed property not found.",
         )
 
     return {
@@ -362,40 +351,6 @@ def update_managed_property_endpoint(
         "has_rental": has_rental,
         "property_label": property_label,
     }
-
-# Endpoint para eliminar una propiedad gestionada existente.
-@app.delete(
-    "/managed-property/{property_id}",
-    tags=["managed-properties"],
-    summary="Delete a managed property",
-    response_model=ErrorResponse,
-    responses={
-        404: {
-            "model": ErrorResponse,
-            "description": "Managed property not found",
-        }
-    },
-)
-def delete_managed_property_endpoint(property_id: int):
-    deleted = delete_managed_property(property_id)
-
-    if not deleted:
-        raise HTTPException(
-            status_code=404,
-            detail="Managed property not found."
-        )
-
-    return {"detail": "Managed property deleted successfully."}
-
-
-def _months_between(d1: date, d2: date) -> int:
-    return (d2.year - d1.year) * 12 + (d2.month - d1.month)
-
-
-def _derive_due_date(period: str, payment_day: int) -> date:
-    year, month = int(period[:4]), int(period[5:7])
-    last_day = monthrange(year, month)[1]
-    return date(year, month, min(payment_day, last_day))
 
 
 @app.get(
@@ -415,42 +370,90 @@ def get_contracts():
     response_model=list[TenantListItem],
 )
 def get_tenants():
-    return list_tenants()
+    items = list_tenants()
+    today = date.today()
+    results = []
+
+    for item in items:
+        start_str = item["start_date"]
+        start = date.fromisoformat(start_str) if start_str else None
+        tenancy_months = months_between(start, today) if start else None
+
+        last_adj_str = item["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
+        )
+
+        results.append(
+            {
+                **item,
+                "last_adjustment_date": last_adjustment_date,
+                "months_since_last_adjustment": months_since_last,
+                "tenancy_months": tenancy_months,
+                "tenancy_years": tenancy_months // 12 if tenancy_months is not None else None,
+            }
+        )
+
+    return results
+
+
+@app.delete(
+    "/managed-property/{property_id}",
+    tags=["managed-properties"],
+    summary="Delete a managed property",
+    response_model=ErrorResponse,
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Managed property not found",
+        }
+    },
+)
+def delete_managed_property_endpoint(property_id: int):
+    deleted = delete_managed_property(property_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Managed property not found.",
+        )
+
+    return {"detail": "Managed property deleted successfully."}
 
 
 @app.post(
     "/contracts/{contract_id}/payments",
     tags=["payments"],
-    summary="Create payment period for a contract",
+    summary="Create a manual payment record",
     response_model=PaymentResponse,
-    status_code=201,
     responses={
-        404: {"model": ErrorResponse, "description": "Contract not found"},
-        409: {"model": ErrorResponse, "description": "Period already exists"},
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+        409: {"model": ErrorResponse, "description": "Payment for this period already exists"},
     },
 )
 def create_payment(contract_id: int, data: PaymentCreate):
     contract = get_contract_for_payment(contract_id)
     if contract is None:
-        raise HTTPException(status_code=404, detail="Contract not found.")
+        raise HTTPException(status_code=404, detail="Active contract not found.")
 
     due_date = _derive_due_date(data.period, contract["payment_day"])
 
     try:
-        payment = insert_payment(
+        payment_id = insert_payment(
             contract_id=contract_id,
             period=data.period,
-            due_date=due_date.isoformat(),
+            due_date=str(due_date),
             expected_amount=contract["current_rent"],
             comment=data.comment,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409,
-            detail="A payment for this period already exists.",
+            detail=f"A payment for period {data.period} already exists on this contract.",
         )
 
-    return payment
+    return get_payment(payment_id)
 
 
 @app.get(
@@ -459,46 +462,47 @@ def create_payment(contract_id: int, data: PaymentCreate):
     summary="List payments for a contract",
     response_model=list[PaymentResponse],
     responses={
-        404: {"model": ErrorResponse, "description": "Contract not found"},
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
     },
 )
-def get_payments_for_contract(contract_id: int):
-    contract = get_contract_for_payment(contract_id)
-    if contract is None:
-        raise HTTPException(status_code=404, detail="Contract not found.")
+def list_payments(contract_id: int):
+    if get_contract_for_payment(contract_id) is None:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
     return list_payments_for_contract(contract_id)
 
 
 @app.patch(
     "/payments/{payment_id}",
     tags=["payments"],
-    summary="Update a payment record",
+    summary="Update payment with actual paid amount",
     response_model=PaymentResponse,
     responses={
         404: {"model": ErrorResponse, "description": "Payment not found"},
     },
 )
-def update_payment_endpoint(payment_id: int, data: PaymentUpdate):
+def patch_payment(payment_id: int, data: PaymentUpdate):
     payment = get_payment(payment_id)
     if payment is None:
         raise HTTPException(status_code=404, detail="Payment not found.")
 
-    updates: dict = {}
+    paid_amount = (
+        data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
+    )
+    paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
+    comment = data.comment if data.comment is not None else payment["comment"]
 
-    if data.paid_amount is not None:
-        updates["paid_amount"] = data.paid_amount
-        if data.paid_amount >= payment["expected_amount"]:
-            updates["status"] = "paid"
-        elif data.paid_amount > 0:
-            updates["status"] = "partial"
+    if paid_amount is None:
+        status = payment["status"]
+    elif paid_amount >= payment["expected_amount"]:
+        status = "paid"
+    elif paid_amount > 0:
+        status = "partial"
+    else:
+        status = payment["status"]
 
-    if data.paid_at is not None:
-        updates["paid_at"] = data.paid_at.isoformat()
-
-    if data.comment is not None:
-        updates["comment"] = data.comment
-
-    return update_payment(payment_id, updates)
+    update_payment(payment_id, paid_amount, paid_at, status, comment)
+    return get_payment(payment_id)
 
 
 @app.delete(

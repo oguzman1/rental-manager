@@ -19,8 +19,30 @@ export function formatFrequency(freq) {
   return freq
 }
 
+export function formatMonthsAgo(n) {
+  if (n === null || n === undefined) return '—'
+  if (n === 0) return 'este mes'
+  if (n === 1) return 'hace 1 mes'
+  return `hace ${n} meses`
+}
+
+export function formatMonthsUntil(n) {
+  if (n === null || n === undefined) return '—'
+  if (n === 0) return 'este mes'
+  if (n > 0) return n === 1 ? 'en 1 mes' : `en ${n} meses`
+  const abs = Math.abs(n)
+  return abs === 1 ? 'vencido hace 1 mes' : `vencido hace ${abs} meses`
+}
+
+export function formatTenancyYears(years) {
+  if (years === null || years === undefined) return '—'
+  if (years === 0) return '< 1 año'
+  if (years === 1) return '1 año'
+  return `${years} años`
+}
+
 export function nextMissingPeriod(payments) {
-  const existing = new Set(payments.map((p) => p.period))
+  const existing = new Set((payments || []).map((p) => p.period))
   const now = new Date()
   let year = now.getFullYear()
   let month = now.getMonth() + 1
@@ -28,8 +50,11 @@ export function nextMissingPeriod(payments) {
   for (let i = 0; i < 24; i++) {
     const period = `${year}-${String(month).padStart(2, '0')}`
     if (!existing.has(period)) return period
-    month++
-    if (month > 12) { month = 1; year++ }
+    month += 1
+    if (month > 12) {
+      month = 1
+      year += 1
+    }
   }
 
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -37,10 +62,12 @@ export function nextMissingPeriod(payments) {
 
 export function contractDuration(startDateStr) {
   if (!startDateStr) return null
+
   const [y, m, d] = startDateStr.split('-').map(Number)
   if (!y || !m || !d) return null
+
   const start = new Date(y, m - 1, d)
-  if (isNaN(start.getTime())) return null
+  if (Number.isNaN(start.getTime())) return null
 
   const now = new Date()
   let years = now.getFullYear() - start.getFullYear()
@@ -54,8 +81,9 @@ export function contractDuration(startDateStr) {
   if (years < 0) return null
   if (years === 0 && months === 0) return '< 1 mes'
 
-  const chunks = []
-  if (years > 0) chunks.push(`${years} año${years > 1 ? 's' : ''}`)
-  if (months > 0) chunks.push(`${months} mes${months > 1 ? 'es' : ''}`)
-  return chunks.join(' ')
+  const parts = []
+  if (years > 0) parts.push(`${years} año${years > 1 ? 's' : ''}`)
+  if (months > 0) parts.push(`${months} mes${months > 1 ? 'es' : ''}`)
+
+  return parts.join(' ')
 }

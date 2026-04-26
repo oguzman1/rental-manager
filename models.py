@@ -5,19 +5,16 @@ from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 
 
-# Catálogo de estados permitidos para una propiedad.
 class PropertyStatus(str, Enum):
     occupied = "occupied"
     vacant = "vacant"
 
 
-# Catálogo de valores válidos para la frecuencia de reajuste.
 class AdjustmentFrequency(str, Enum):
     annual = "annual"
     semiannual = "semiannual"
 
 
-# Modelo base para los datos de inventario de una propiedad.
 class PropertyInfo(BaseModel):
     comuna: str
     rol: str
@@ -30,7 +27,6 @@ class PropertyInfo(BaseModel):
     fiscal_appraisal: int | None = None
 
 
-# Modelo para los datos del arriendo vigente.
 class RentalInfo(BaseModel):
     tenant_name: str
     payment_day: int = Field(ge=1, le=31)
@@ -42,13 +38,11 @@ class RentalInfo(BaseModel):
     adjustment_month: str
 
 
-# Modelo de entrada principal: una propiedad puede venir con o sin arriendo.
 class ManagedPropertyCreate(BaseModel):
     property: PropertyInfo
     rental: RentalInfo | None = None
 
 
-# Modelo de salida: define la respuesta limpia que devolverá la API.
 class ManagedPropertyResponse(BaseModel):
     id: int
     message: str
@@ -58,11 +52,10 @@ class ManagedPropertyResponse(BaseModel):
     property_label: str | None = None
 
 
-# Modelo simple para documentar errores de negocio.
 class ErrorResponse(BaseModel):
     detail: str
 
-# Modelo simple para listar propiedades guardadas.
+
 class ManagedPropertyListItem(BaseModel):
     id: int
     rol: str
@@ -72,6 +65,7 @@ class ManagedPropertyListItem(BaseModel):
     property_label: str | None = None
     tenant_name: str | None = None
     payment_day: int | None = None
+
 
 class RentAdjustmentItem(BaseModel):
     id: int
@@ -84,11 +78,11 @@ class RentAdjustmentItem(BaseModel):
     requires_adjustment_notice: bool
     tenant_name: str | None = None
     payment_day: int | None = None
-    last_adjustment_date: str | None = None
+    last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     months_until_next_adjustment: int | None = None
 
-# Modelo para mostrar una vista operativa consolidada de propiedades y arriendos.
+
 class DashboardItem(BaseModel):
     id: int
     rol: str
@@ -101,39 +95,43 @@ class DashboardItem(BaseModel):
     next_adjustment_date: date | None = None
     adjustment_notice_date: date | None = None
     requires_adjustment_notice: bool = False
-    start_date: str | None = None
-    adjustment_frequency: str | None = None
-    last_adjustment_date: str | None = None
+    start_date: date | None = None
+    adjustment_frequency: AdjustmentFrequency | None = None
+    last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
 
 
 class ContractListItem(BaseModel):
     id: int
     property_id: int
-    property_label: str | None = None
+    property_label: str
     rol: str
-    tenant_name: str | None = None
-    start_date: str | None = None
+    tenant_name: str
+    start_date: date
     current_rent: int
     payment_day: int
-    adjustment_frequency: str
+    adjustment_frequency: AdjustmentFrequency
 
 
 class TenantListItem(BaseModel):
     id: int
-    property_id: int
     display_name: str
+    property_id: int | None = None
+    rol: str | None = None
     property_label: str | None = None
-    rol: str
-    start_date: str | None = None
-    current_rent: int | None = None
     payment_day: int | None = None
+    start_date: date | None = None
+    current_rent: int | None = None
+    last_adjustment_date: date | None = None
+    months_since_last_adjustment: int | None = None
+    tenancy_months: int | None = None
+    tenancy_years: int | None = None
 
 
 class PaymentStatus(str, Enum):
     pending = "pending"
-    paid = "paid"
     partial = "partial"
+    paid = "paid"
 
 
 class PaymentSource(str, Enum):
@@ -146,10 +144,10 @@ class PaymentCreate(BaseModel):
 
     @field_validator("period")
     @classmethod
-    def period_must_be_yyyy_mm(cls, v: str) -> str:
-        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", v):
+    def period_must_be_yyyy_mm(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
             raise ValueError("period must be in YYYY-MM format (e.g. 2025-04)")
-        return v
+        return value
 
 
 class PaymentUpdate(BaseModel):
@@ -162,11 +160,11 @@ class PaymentResponse(BaseModel):
     id: int
     contract_id: int
     period: str
-    due_date: str
+    due_date: date
     expected_amount: int
     paid_amount: int | None = None
-    paid_at: str | None = None
-    status: str
-    source: str
+    paid_at: date | None = None
+    status: PaymentStatus
+    source: PaymentSource
     comment: str | None = None
-    created_at: str
+    created_at: date

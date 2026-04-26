@@ -2,7 +2,7 @@ from calendar import monthrange
 from datetime import date
 import sqlite3
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from adjustments import (
@@ -13,6 +13,7 @@ from adjustments import (
 )
 from db import (
     delete_managed_property,
+    delete_payment,
     get_contract_for_payment,
     get_payment,
     init_db,
@@ -108,7 +109,6 @@ def get_dashboard():
                 adjustment_frequency=AdjustmentFrequency(item["adjustment_frequency"]),
                 today=today,
             )
-
             adjustment_notice_date = calculate_adjustment_notice_date(
                 next_adjustment_date
             )
@@ -503,3 +503,19 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
 
     update_payment(payment_id, paid_amount, paid_at, status, comment)
     return get_payment(payment_id)
+
+
+@app.delete(
+    "/payments/{payment_id}",
+    tags=["payments"],
+    summary="Delete a payment record",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse, "description": "Payment not found"},
+    },
+)
+def delete_payment_endpoint(payment_id: int):
+    deleted = delete_payment(payment_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    return Response(status_code=204)

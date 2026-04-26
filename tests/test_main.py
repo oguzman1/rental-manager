@@ -4,10 +4,8 @@ import sqlite3 as _sqlite3
 
 from fastapi.testclient import TestClient
 
-# Usa una base distinta para tests antes de importar la app.
 os.environ["DB_NAME"] = "test_rental_manager.db"
 
-# Borra la base de test anterior para partir limpio.
 test_db = Path("test_rental_manager.db")
 if test_db.exists():
     test_db.unlink()
@@ -20,7 +18,6 @@ client = TestClient(app)
 
 def test_health_returns_ok():
     response = client.get("/health")
-
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
@@ -53,7 +50,6 @@ def test_create_managed_property_returns_id():
     response = client.post("/managed-property", json=payload)
 
     assert response.status_code == 200
-
     data = response.json()
     assert data["id"] == 1
     assert data["rol"] == "02162-00036"
@@ -90,11 +86,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
     create_response = client.post("/managed-property", json=payload)
     assert create_response.status_code == 200
 
-    response = client.get(
-        "/rent-adjustments",
-        params={"as_of": "2026-12-15"},
-    )
-
+    response = client.get("/rent-adjustments", params={"as_of": "2026-12-15"})
     assert response.status_code == 200
 
     adjustments = response.json()
@@ -377,10 +369,6 @@ def test_list_contracts_returns_active_contracts_with_correct_shape():
     assert item["start_date"] == "2024-06-01"
 
 
-# ---------------------------------------------------------------------------
-# Payment tests
-# ---------------------------------------------------------------------------
-
 _PAYMENT_ROL = "09001-00001"
 
 _PAYMENT_PROPERTY = {
@@ -565,3 +553,33 @@ def test_create_payment_invalid_period_returns_422():
     for bad in ("2025-13", "25-04", "2025/04", "abril", ""):
         r = client.post(f"/contracts/{cid}/payments", json={"period": bad})
         assert r.status_code == 422, f"Expected 422 for period={bad!r}, got {r.status_code}"
+
+
+def test_delete_payment_returns_204():
+    cid = _setup_payment_property()
+    payment = client.post(
+        f"/contracts/{cid}/payments", json={"period": "2025-11"}
+    ).json()
+
+    response = client.delete(f"/payments/{payment['id']}")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_delete_payment_unknown_returns_404():
+    response = client.delete("/payments/99999")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Payment not found."
+
+
+def test_delete_payment_actually_removes_it():
+    cid = _setup_payment_property()
+    payment = client.post(
+        f"/contracts/{cid}/payments", json={"period": "2025-12"}
+    ).json()
+    payment_id = payment["id"]
+
+    client.delete(f"/payments/{payment_id}")
+
+    remaining = client.get(f"/contracts/{cid}/payments").json()
+    assert payment_id not in [p["id"] for p in remaining]

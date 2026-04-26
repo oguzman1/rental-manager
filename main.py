@@ -8,15 +8,18 @@ from db import (
     init_db,
     insert_managed_property,
     insert_payment,
+    list_contracts,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
     list_rentals_for_adjustments,
+    list_tenants,
     update_managed_property,
     update_payment,
 )
 from models import (
     AdjustmentFrequency,
+    ContractListItem,
     DashboardItem,
     ErrorResponse,
     ManagedPropertyCreate,
@@ -27,11 +30,14 @@ from models import (
     PaymentUpdate,
     PropertyStatus,
     RentAdjustmentItem,
+    TenantListItem,
 )
 
 from adjustments import (
     calculate_adjustment_notice_date,
+    calculate_due_adjustment_date,
     calculate_next_adjustment_date,
+    months_between,
 )
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -88,6 +94,12 @@ def get_dashboard():
         adjustment_notice_date = None
         requires_adjustment_notice = False
 
+        last_adj_str = item["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
+        )
+
         if item["adjustment_frequency"] and item["start_date"]:
             next_adjustment_date = calculate_next_adjustment_date(
                 start_date=date.fromisoformat(item["start_date"]),
@@ -116,6 +128,10 @@ def get_dashboard():
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
                 "requires_adjustment_notice": requires_adjustment_notice,
+                "start_date": item["start_date"],
+                "adjustment_frequency": item["adjustment_frequency"],
+                "last_adjustment_date": last_adjustment_date,
+                "months_since_last_adjustment": months_since_last,
             }
         )
 
@@ -234,14 +250,25 @@ def get_rent_adjustments(
     results = []
 
     for rental in rentals:
+        start = date.fromisoformat(rental["start_date"])
+        freq  = AdjustmentFrequency(rental["adjustment_frequency"])
+
         next_adjustment_date = calculate_next_adjustment_date(
-            start_date=date.fromisoformat(rental["start_date"]),
-            adjustment_frequency=AdjustmentFrequency(rental["adjustment_frequency"]),
+            start_date=start,
+            adjustment_frequency=freq,
             today=today,
         )
+        adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
 
-        adjustment_notice_date = calculate_adjustment_notice_date(
-            next_adjustment_date
+        due_date = calculate_due_adjustment_date(
+            start_date=start, adjustment_frequency=freq, today=today
+        )
+        months_until_next = months_between(today, due_date)
+
+        last_adj_str = rental["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
         )
 
         results.append(
@@ -256,6 +283,9 @@ def get_rent_adjustments(
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
                 "requires_adjustment_notice": today >= adjustment_notice_date,
+                "last_adjustment_date": last_adjustment_date,
+                "months_since_last_adjustment": months_since_last,
+                "months_until_next_adjustment": months_until_next,
             }
         )
         
@@ -336,6 +366,51 @@ def update_managed_property_endpoint(
         "has_rental": has_rental,
         "property_label": property_label,
     }
+
+# Endpoint para listar contratos activos.
+@app.get(
+    "/contracts",
+    tags=["contracts"],
+    summary="List active contracts",
+    response_model=list[ContractListItem],
+)
+def get_contracts():
+    return list_contracts()
+
+
+# Endpoint para listar arrendatarios activos.
+@app.get(
+    "/tenants",
+    tags=["tenants"],
+    summary="List active tenants",
+    response_model=list[TenantListItem],
+)
+def get_tenants():
+    items = list_tenants()
+    today = date.today()
+    results = []
+    for item in items:
+        start_str = item["start_date"]
+        start = date.fromisoformat(start_str) if start_str else None
+        tenancy_months = months_between(start, today) if start else None
+
+        last_adj_str = item["last_adjustment_date"]
+        last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
+        months_since_last = (
+            months_between(last_adjustment_date, today) if last_adjustment_date else None
+        )
+
+        results.append(
+            {
+                **item,
+                "last_adjustment_date": last_adjustment_date,
+                "months_since_last_adjustment": months_since_last,
+                "tenancy_months": tenancy_months,
+                "tenancy_years": tenancy_months // 12 if tenancy_months is not None else None,
+            }
+        )
+    return results
+
 
 # Endpoint para eliminar una propiedad gestionada existente.
 @app.delete(

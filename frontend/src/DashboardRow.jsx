@@ -12,13 +12,25 @@ function DashboardRow({ property, onClick }) {
         <StatusBadge status={property.status} />
       </td>
       <td className="td">{property.property_label ?? <span className="text-muted">—</span>}</td>
-      <td className="td">{property.tenant_name ?? <span className="text-muted">—</span>}</td>
+      <td className="td">
+        <div>{property.tenant_name ?? <span className="text-muted">—</span>}</div>
+        <div className="td-sub">
+          {property.tenant_name ? (property.start_date ?? '—') : 'Sin contrato'}
+        </div>
+      </td>
       <td className="td td-center td-mono">
         {property.payment_day ?? <span className="text-muted">—</span>}
       </td>
       <td className="td td-right td-mono">{formatCLP(property.current_rent)}</td>
       <td className="td td-mono td-muted">
-        {property.next_adjustment_date ?? <span className="text-muted">—</span>}
+        <div>{property.next_adjustment_date ?? <span className="text-muted">—</span>}</div>
+        {property.start_date && (
+          <div className="td-sub">
+            {property.last_adjustment_date
+              ? `Últ: ${property.last_adjustment_date}`
+              : 'Sin reajuste'}
+          </div>
+        )}
       </td>
       <td className="td">
         {property.requires_adjustment_notice ? (

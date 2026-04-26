@@ -243,6 +243,128 @@ def test_dashboard_includes_operational_fields():
     assert "requires_adjustment_notice" in dashboard_item
 
 
+def test_contracts_returns_200():
+    response = client.get("/contracts")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_contracts_items_have_expected_shape():
+    response = client.get("/contracts")
+    items = response.json()
+    assert len(items) > 0
+    item = items[0]
+    assert "id" in item
+    assert "property_id" in item
+    assert "rol" in item
+    assert "tenant_name" in item
+    assert "current_rent" in item
+    assert "start_date" in item
+    assert "adjustment_frequency" in item
+
+
+def test_tenants_returns_200():
+    response = client.get("/tenants")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_tenants_items_have_expected_shape():
+    response = client.get("/tenants")
+    items = response.json()
+    assert len(items) > 0
+    item = items[0]
+    assert "id" in item
+    assert "display_name" in item
+    assert "property_id" in item
+    assert "rol" in item
+    assert "current_rent" in item
+    assert "start_date" in item
+
+
+def test_dashboard_last_adjustment_date_is_null_without_real_adjustment():
+    # La propiedad "02162-00036" tiene un solo rent_change con effective_from == start_date.
+    # Por regla: effective_from == start_date es renta inicial, no reajuste.
+    # last_adjustment_date debe ser null.
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    items = response.json()
+    item = next(i for i in items if i["rol"] == "02162-00036")
+    assert item["last_adjustment_date"] is None
+    assert item["months_since_last_adjustment"] is None
+
+
+def test_dashboard_last_adjustment_date_reflects_real_adjustment():
+    # Inserta un rent_change con effective_from > start_date para simular un reajuste real.
+    # Solo effective_from > start_date cuenta como reajuste (ver _LATEST_ADJUSTMENT en db.py).
+    import sqlite3
+    conn = sqlite3.connect("test_rental_manager.db")
+    row = conn.execute(
+        """SELECT c.id FROM contracts c
+           JOIN properties p ON p.id = c.property_id
+           WHERE p.rol = '02162-00036'"""
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO rent_changes (contract_id, effective_from, amount) VALUES (?, '2023-05-01', 870000)",
+        (row[0],),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get("/dashboard")
+    items = response.json()
+    item = next(i for i in items if i["rol"] == "02162-00036")
+    assert item["last_adjustment_date"] == "2023-05-01"
+    assert item["months_since_last_adjustment"] is not None
+    assert item["months_since_last_adjustment"] >= 0
+
+
+def test_rent_adjustments_months_until_next_is_positive_when_not_yet_due():
+    # "09999-00001": start_date=2025-01-01, annual. Primer reajuste programado = 2026-01-01.
+    # Con as_of=2025-06-15, el ciclo actual no ha vencido: months_until debe ser positivo.
+    response = client.get("/rent-adjustments", params={"as_of": "2025-06-15"})
+    assert response.status_code == 200
+    items = response.json()
+    item = next(i for i in items if i["rol"] == "09999-00001")
+    assert item["months_until_next_adjustment"] > 0
+
+
+def test_rent_adjustments_months_until_next_is_negative_when_overdue():
+    # "09999-00001": start_date=2025-01-01, annual. Reajuste del ciclo 2026 = 2026-01-01.
+    # Con as_of=2026-03-01, ese ciclo ya venció sin que conste un rent_change posterior.
+    # months_until debe ser negativo (reajuste atrasado).
+    response = client.get("/rent-adjustments", params={"as_of": "2026-03-01"})
+    assert response.status_code == 200
+    items = response.json()
+    item = next(i for i in items if i["rol"] == "09999-00001")
+    assert item["months_until_next_adjustment"] < 0
+
+
+def test_tenants_tenancy_fields_are_consistent():
+    response = client.get("/tenants")
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) > 0
+    for item in items:
+        assert item["tenancy_months"] is not None
+        assert item["tenancy_months"] >= 0
+        assert item["tenancy_years"] == item["tenancy_months"] // 12
+
+
+def test_tenants_months_since_last_adjustment_is_null_without_real_adjustment():
+    # Los arrendatarios de prueba solo tienen renta inicial (effective_from == start_date).
+    # months_since_last_adjustment debe ser null para todos.
+    response = client.get("/tenants")
+    items = response.json()
+    # Excluye el arrendatario de "02162-00036" donde ya insertamos un reajuste real
+    # en test_dashboard_last_adjustment_date_reflects_real_adjustment.
+    for item in items:
+        if item["rol"] != "02162-00036":
+            assert item["months_since_last_adjustment"] is None, (
+                f"Arrendatario {item['display_name']} no debería tener reajuste"
+            )
+
+
 def test_dashboard_no_contract_property_has_null_rent_fields():
     payload = {
         "property": {

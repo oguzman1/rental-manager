@@ -41,3 +41,30 @@ def calculate_next_adjustment_date(
 # Calcula la fecha de aviso de reajuste: un mes calendario antes del reajuste.
 def calculate_adjustment_notice_date(next_adjustment_date: date) -> date:
     return add_months(next_adjustment_date, -1)
+
+
+def months_between(earlier: date, later: date) -> int:
+    """Diferencia en meses calendario: (año*12 + mes) de later menos earlier.
+    Ignora el día del mes; útil para métricas operativas de display."""
+    return (later.year - earlier.year) * 12 + (later.month - earlier.month)
+
+
+def calculate_due_adjustment_date(
+    start_date: date,
+    adjustment_frequency: AdjustmentFrequency,
+    today: date,
+) -> date:
+    """Retorna la fecha programada del ciclo actual de reajuste.
+    El primer reajuste es un ciclo completo después de start_date.
+    Si esa fecha ya pasó y no se aplicó, retorna la fecha vencida (puede ser pasado).
+    months_between(today, resultado) < 0 indica reajuste atrasado."""
+    months_to_add = 12 if adjustment_frequency == AdjustmentFrequency.annual else 6
+    due = add_months(start_date, months_to_add)
+    if due > today:
+        return due
+    prev = due
+    while True:
+        next_d = add_months(prev, months_to_add)
+        if next_d > today:
+            return prev
+        prev = next_d

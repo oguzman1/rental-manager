@@ -358,6 +358,18 @@ _LATEST_RENT = """
     )
 """
 
+# Un rent_change con effective_from == c.start_date es la renta inicial del contrato,
+# no un reajuste real. Solo effective_from > c.start_date cuenta como reajuste.
+_LATEST_ADJUSTMENT = """
+    (
+        SELECT effective_from FROM rent_changes
+        WHERE  contract_id = c.id
+        AND    effective_from > c.start_date
+        ORDER  BY effective_from DESC, id DESC
+        LIMIT  1
+    )
+"""
+
 
 def list_managed_properties() -> list[dict]:
     with get_connection() as conn:
@@ -408,12 +420,13 @@ def list_rentals_for_adjustments() -> list[dict]:
                 p.id,
                 p.rol,
                 p.comuna,
-                p.display_name     AS property_label,
-                t.display_name     AS tenant_name,
+                p.display_name          AS property_label,
+                t.display_name          AS tenant_name,
                 c.payment_day,
-                rc.amount          AS current_rent,
+                rc.amount               AS current_rent,
                 c.adjustment_frequency,
-                c.start_date
+                c.start_date,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
             FROM properties p
             JOIN contracts c
                 ON c.property_id = p.id AND c.is_active = 1
@@ -440,6 +453,100 @@ def list_rentals_for_adjustments() -> list[dict]:
                 "current_rent": row[6],
                 "adjustment_frequency": row[7],
                 "start_date": row[8],
+                "last_adjustment_date": row[9],
+            }
+        )
+    return results
+
+
+def list_contracts() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                c.id,
+                c.property_id,
+                p.rol,
+                p.display_name     AS property_label,
+                t.display_name     AS tenant_name,
+                c.start_date,
+                c.payment_day,
+                c.adjustment_frequency,
+                c.adjustment_month,
+                rc.amount          AS current_rent
+            FROM contracts c
+            JOIN properties p
+                ON p.id = c.property_id
+            LEFT JOIN contract_tenants ct
+                ON ct.contract_id = c.id AND ct.is_primary = 1
+            LEFT JOIN tenants t
+                ON t.id = ct.tenant_id
+            LEFT JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.is_active = 1
+            ORDER BY c.id DESC
+            """
+        ).fetchall()
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row[0],
+                "property_id": row[1],
+                "rol": row[2],
+                "property_label": row[3],
+                "tenant_name": row[4],
+                "start_date": row[5],
+                "payment_day": row[6],
+                "adjustment_frequency": row[7],
+                "adjustment_month": row[8],
+                "current_rent": row[9],
+            }
+        )
+    return results
+
+
+def list_tenants() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.display_name,
+                p.id                    AS property_id,
+                p.rol,
+                p.display_name          AS property_label,
+                c.payment_day,
+                c.start_date,
+                rc.amount               AS current_rent,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
+            FROM tenants t
+            JOIN contract_tenants ct
+                ON ct.tenant_id = t.id AND ct.is_primary = 1
+            JOIN contracts c
+                ON c.id = ct.contract_id AND c.is_active = 1
+            JOIN properties p
+                ON p.id = c.property_id
+            LEFT JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            ORDER BY t.id DESC
+            """
+        ).fetchall()
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row[0],
+                "display_name": row[1],
+                "property_id": row[2],
+                "rol": row[3],
+                "property_label": row[4],
+                "payment_day": row[5],
+                "start_date": row[6],
+                "current_rent": row[7],
+                "last_adjustment_date": row[8],
             }
         )
     return results
@@ -454,12 +561,13 @@ def list_dashboard_items() -> list[dict]:
                 p.rol,
                 p.comuna,
                 p.status,
-                p.display_name     AS property_label,
-                t.display_name     AS tenant_name,
+                p.display_name          AS property_label,
+                t.display_name          AS tenant_name,
                 c.payment_day,
-                rc.amount          AS current_rent,
+                rc.amount               AS current_rent,
                 c.adjustment_frequency,
-                c.start_date
+                c.start_date,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
             FROM properties p
             LEFT JOIN contracts c
                    ON c.property_id = p.id AND c.is_active = 1
@@ -487,6 +595,7 @@ def list_dashboard_items() -> list[dict]:
                 "current_rent": row[7],
                 "adjustment_frequency": row[8],
                 "start_date": row[9],
+                "last_adjustment_date": row[10],
             }
         )
     return results

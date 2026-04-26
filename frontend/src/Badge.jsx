@@ -1,3 +1,28 @@
+export function PaymentBadge({ status }) {
+  if (status === 'paid') {
+    return (
+      <span className="badge badge-ok">
+        <span className="badge-dot" />
+        Pagado
+      </span>
+    )
+  }
+  if (status === 'partial') {
+    return (
+      <span className="badge badge-warn">
+        <span className="badge-dot" />
+        Parcial
+      </span>
+    )
+  }
+  return (
+    <span className="badge badge-muted">
+      <span className="badge-dot" />
+      Pendiente
+    </span>
+  )
+}
+
 export function StatusBadge({ status }) {
   const isOccupied = status === 'occupied'
   return (

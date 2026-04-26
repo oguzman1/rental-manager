@@ -1,25 +1,42 @@
 from fastapi import Body, FastAPI, HTTPException, Query
 from datetime import date
+from calendar import monthrange
 import sqlite3
 from db import (
     delete_managed_property,
+    get_contract_for_payment,
+    get_payment,
     init_db,
     insert_managed_property,
+    insert_payment,
+    list_contracts,
     list_dashboard_items,
     list_managed_properties,
+    list_payments_for_contract,
     list_rentals_for_adjustments,
     update_managed_property,
+    update_payment,
 )
 from models import (
     AdjustmentFrequency,
+    ContractListItem,
     DashboardItem,
     ErrorResponse,
     ManagedPropertyCreate,
     ManagedPropertyListItem,
     ManagedPropertyResponse,
+    PaymentCreate,
+    PaymentResponse,
+    PaymentUpdate,
     PropertyStatus,
     RentAdjustmentItem,
 )
+
+
+def _derive_due_date(period: str, payment_day: int) -> date:
+    year, month = int(period[:4]), int(period[5:7])
+    last_day = monthrange(year, month)[1]
+    return date(year, month, min(payment_day, last_day))
 
 from adjustments import (
     calculate_adjustment_notice_date,
@@ -352,3 +369,103 @@ def delete_managed_property_endpoint(property_id: int):
         )
 
     return {"detail": "Managed property deleted successfully."}
+
+
+# Endpoint para listar contratos activos con sus datos operativos mínimos.
+@app.get(
+    "/contracts",
+    tags=["contracts"],
+    summary="List active contracts",
+    response_model=list[ContractListItem],
+)
+def get_contracts():
+    return list_contracts()
+
+
+# Endpoint para registrar un pago manual en un contrato activo.
+# due_date se deriva de period + payment_day del contrato.
+# expected_amount se obtiene como snapshot de la renta vigente.
+@app.post(
+    "/contracts/{contract_id}/payments",
+    tags=["payments"],
+    summary="Create a manual payment record",
+    response_model=PaymentResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+        409: {"model": ErrorResponse, "description": "Payment for this period already exists"},
+    },
+)
+def create_payment(contract_id: int, data: PaymentCreate):
+    contract = get_contract_for_payment(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    due_date = _derive_due_date(data.period, contract["payment_day"])
+
+    try:
+        payment_id = insert_payment(
+            contract_id=contract_id,
+            period=data.period,
+            due_date=str(due_date),
+            expected_amount=contract["current_rent"],
+            comment=data.comment,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A payment for period {data.period} already exists on this contract.",
+        )
+
+    return get_payment(payment_id)
+
+
+# Endpoint para listar todos los pagos de un contrato activo.
+@app.get(
+    "/contracts/{contract_id}/payments",
+    tags=["payments"],
+    summary="List payments for a contract",
+    response_model=list[PaymentResponse],
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def list_payments(contract_id: int):
+    if get_contract_for_payment(contract_id) is None:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    return list_payments_for_contract(contract_id)
+
+
+# Endpoint para registrar el monto efectivo pagado sobre un pago existente.
+# Reglas de derivación de status:
+#   sin paid_amount (ni en registro ni en body) → status sin cambio
+#   paid_amount >= expected_amount              → paid
+#   paid_amount > 0                             → partial
+@app.patch(
+    "/payments/{payment_id}",
+    tags=["payments"],
+    summary="Update payment with actual paid amount",
+    response_model=PaymentResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Payment not found"},
+    },
+)
+def patch_payment(payment_id: int, data: PaymentUpdate):
+    payment = get_payment(payment_id)
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+
+    paid_amount = data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
+    paid_at     = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
+    comment     = data.comment if data.comment is not None else payment["comment"]
+
+    if paid_amount is None:
+        status = payment["status"]
+    elif paid_amount >= payment["expected_amount"]:
+        status = "paid"
+    elif paid_amount > 0:
+        status = "partial"
+    else:
+        status = payment["status"]
+
+    update_payment(payment_id, paid_amount, paid_at, status, comment)
+    return get_payment(payment_id)

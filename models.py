@@ -1,7 +1,8 @@
+import re
 from datetime import date
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Catálogo de estados permitidos para una propiedad.
@@ -83,6 +84,9 @@ class RentAdjustmentItem(BaseModel):
     requires_adjustment_notice: bool
     tenant_name: str | None = None
     payment_day: int | None = None
+    last_adjustment_date: str | None = None
+    months_since_last_adjustment: int | None = None
+    months_until_next_adjustment: int | None = None
 
 # Modelo para mostrar una vista operativa consolidada de propiedades y arriendos.
 class DashboardItem(BaseModel):
@@ -97,3 +101,72 @@ class DashboardItem(BaseModel):
     next_adjustment_date: date | None = None
     adjustment_notice_date: date | None = None
     requires_adjustment_notice: bool = False
+    start_date: str | None = None
+    adjustment_frequency: str | None = None
+    last_adjustment_date: str | None = None
+    months_since_last_adjustment: int | None = None
+
+
+class ContractListItem(BaseModel):
+    id: int
+    property_id: int
+    property_label: str | None = None
+    rol: str
+    tenant_name: str | None = None
+    start_date: str | None = None
+    current_rent: int
+    payment_day: int
+    adjustment_frequency: str
+
+
+class TenantListItem(BaseModel):
+    id: int
+    property_id: int
+    display_name: str
+    property_label: str | None = None
+    rol: str
+    start_date: str | None = None
+    current_rent: int | None = None
+    payment_day: int | None = None
+
+
+class PaymentStatus(str, Enum):
+    pending = "pending"
+    paid = "paid"
+    partial = "partial"
+
+
+class PaymentSource(str, Enum):
+    manual = "manual"
+
+
+class PaymentCreate(BaseModel):
+    period: str
+    comment: str | None = None
+
+    @field_validator("period")
+    @classmethod
+    def period_must_be_yyyy_mm(cls, v: str) -> str:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", v):
+            raise ValueError("period must be in YYYY-MM format (e.g. 2025-04)")
+        return v
+
+
+class PaymentUpdate(BaseModel):
+    paid_amount: int | None = None
+    paid_at: date | None = None
+    comment: str | None = None
+
+
+class PaymentResponse(BaseModel):
+    id: int
+    contract_id: int
+    period: str
+    due_date: str
+    expected_amount: int
+    paid_amount: int | None = None
+    paid_at: str | None = None
+    status: str
+    source: str
+    comment: str | None = None
+    created_at: str

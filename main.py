@@ -1,9 +1,10 @@
 from calendar import monthrange
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Response
 from datetime import date
 import sqlite3
 from db import (
     delete_managed_property,
+    delete_payment,
     get_contract_for_payment,
     get_payment,
     init_db,
@@ -498,3 +499,19 @@ def update_payment_endpoint(payment_id: int, data: PaymentUpdate):
         updates["comment"] = data.comment
 
     return update_payment(payment_id, updates)
+
+
+@app.delete(
+    "/payments/{payment_id}",
+    tags=["payments"],
+    summary="Delete a payment record",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse, "description": "Payment not found"},
+    },
+)
+def delete_payment_endpoint(payment_id: int):
+    deleted = delete_payment(payment_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    return Response(status_code=204)

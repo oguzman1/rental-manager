@@ -663,6 +663,13 @@ def get_payment(payment_id: int) -> dict | None:
     return _payment_row_to_dict(row) if row else None
 
 
+def delete_payment(payment_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def update_payment(payment_id: int, updates: dict) -> dict | None:
     allowed = {"paid_amount", "paid_at", "status", "comment"}
     with get_connection() as conn:

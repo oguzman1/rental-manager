@@ -11,6 +11,7 @@ import PropertiesPage from './PropertiesPage'
 import ContractsPage from './ContractsPage'
 import TenantsPage from './TenantsPage'
 import AdjustmentsPage from './AdjustmentsPage'
+import PaymentsView from './PaymentsView'
 
 const API_URL = 'http://127.0.0.1:8000/dashboard'
 
@@ -84,6 +85,10 @@ function App() {
     }
   }
 
+  function handlePaymentSelect(contract) {
+    setRoute({ name: 'payments', contract, from: route.name })
+  }
+
   function handleClearFilters() {
     setStatusFilter('all')
     setAdjustmentFilter('all')
@@ -127,8 +132,22 @@ function App() {
       )
     }
 
+    if (route.name === 'payments') {
+      return (
+        <PaymentsView
+          contract={route.contract}
+          onBack={() => handleNav(route.from || 'contracts')}
+        />
+      )
+    }
+
     if (route.name === 'contracts') {
-      return <ContractsPage onPropertySelect={handlePropertySelect} />
+      return (
+        <ContractsPage
+          onPropertySelect={handlePropertySelect}
+          onPaymentSelect={handlePaymentSelect}
+        />
+      )
     }
 
     if (route.name === 'tenants') {

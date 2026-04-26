@@ -379,6 +379,38 @@ def test_patch_payment_unknown_returns_404():
     assert response.status_code == 404
 
 
+def test_delete_payment_returns_204():
+    contracts = client.get("/contracts").json()
+    contract_id = contracts[0]["id"]
+    payment = client.post(
+        f"/contracts/{contract_id}/payments", json={"period": "2025-08"}
+    ).json()
+
+    response = client.delete(f"/payments/{payment['id']}")
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+def test_delete_payment_unknown_returns_404():
+    response = client.delete("/payments/99999")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Payment not found."
+
+
+def test_delete_payment_actually_removes_it():
+    contracts = client.get("/contracts").json()
+    contract_id = contracts[0]["id"]
+    payment = client.post(
+        f"/contracts/{contract_id}/payments", json={"period": "2025-09"}
+    ).json()
+    payment_id = payment["id"]
+
+    client.delete(f"/payments/{payment_id}")
+
+    remaining = client.get(f"/contracts/{contract_id}/payments").json()
+    assert payment_id not in [p["id"] for p in remaining]
+
+
 def test_dashboard_no_contract_property_has_null_rent_fields():
     payload = {
         "property": {

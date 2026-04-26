@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
-import { formatCLP, formatFrequency } from './utils'
+import { contractDuration, formatCLP, formatFrequency } from './utils'
 
 const API_URL = 'http://127.0.0.1:8000/contracts'
 
-function ContractsPage({ onPropertySelect }) {
+function ContractsPage({ onPropertySelect, onPaymentSelect }) {
   const [items, setItems] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -42,10 +42,13 @@ function ContractsPage({ onPropertySelect }) {
                     <th className="th th-right">Renta</th>
                     <th className="th th-center">Día pago</th>
                     <th className="th">Reajuste</th>
+                    <th className="th">Pagos</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
+                  {items.map((item) => {
+                    const dur = item.start_date ? contractDuration(item.start_date) : null
+                    return (
                     <tr
                       key={item.id}
                       className="table-row"
@@ -60,7 +63,10 @@ function ContractsPage({ onPropertySelect }) {
                       <td className="td">
                         {item.tenant_name ?? <span className="text-muted">—</span>}
                       </td>
-                      <td className="td td-mono td-muted">{item.start_date ?? '—'}</td>
+                      <td className="td td-mono td-muted">
+                        {item.start_date ?? '—'}
+                        {dur && <div className="td-sub">{dur}</div>}
+                      </td>
                       <td className="td td-right td-mono">{formatCLP(item.current_rent)}</td>
                       <td className="td td-center td-mono">
                         {item.payment_day ?? <span className="text-muted">—</span>}
@@ -68,8 +74,20 @@ function ContractsPage({ onPropertySelect }) {
                       <td className="td td-muted">
                         {formatFrequency(item.adjustment_frequency)}
                       </td>
+                      <td className="td">
+                        <button
+                          className="btn-payments"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onPaymentSelect && onPaymentSelect(item)
+                          }}
+                        >
+                          Ver pagos
+                        </button>
+                      </td>
                     </tr>
-                  ))}
+                  )})}
+
                 </tbody>
               </table>
               <div className="table-footer">

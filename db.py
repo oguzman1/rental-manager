@@ -411,3 +411,245 @@ def list_rentals_for_adjustments() -> list[dict]:
         }
         for row in rows
     ]
+
+
+def list_dashboard_items() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                p.id,
+                p.rol,
+                p.comuna,
+                p.status,
+                p.display_name          AS property_label,
+                t.display_name          AS tenant_name,
+                c.payment_day,
+                rc.amount               AS current_rent,
+                c.adjustment_frequency,
+                c.start_date,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
+                cp.status               AS current_payment_status
+            FROM properties p
+            LEFT JOIN contracts c
+                   ON c.property_id = p.id AND c.is_active = 1
+            LEFT JOIN contract_tenants ct
+                   ON ct.contract_id = c.id AND ct.is_primary = 1
+            LEFT JOIN tenants t
+                   ON t.id = ct.tenant_id
+            LEFT JOIN rent_changes rc
+                   ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            LEFT JOIN (
+                SELECT   contract_id, status
+                FROM     payments
+                WHERE    period = strftime('%Y-%m', 'now')
+                GROUP BY contract_id
+            ) cp ON c.id = cp.contract_id
+            ORDER BY p.id DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "status": row[3],
+            "property_label": row[4],
+            "tenant_name": row[5],
+            "payment_day": row[6],
+            "current_rent": row[7],
+            "adjustment_frequency": row[8],
+            "start_date": row[9],
+            "last_adjustment_date": row[10],
+            "current_payment_status": row[11],
+        }
+        for row in rows
+    ]
+
+
+def list_contracts() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                c.id,
+                c.property_id,
+                p.display_name  AS property_label,
+                p.rol,
+                t.display_name  AS tenant_name,
+                c.start_date,
+                rc.amount       AS current_rent,
+                c.payment_day,
+                c.adjustment_frequency
+            FROM contracts c
+            JOIN properties p
+                ON p.id = c.property_id
+            JOIN contract_tenants ct
+                ON ct.contract_id = c.id AND ct.is_primary = 1
+            JOIN tenants t
+                ON t.id = ct.tenant_id
+            JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.is_active = 1
+            ORDER BY c.id DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "property_id": row[1],
+            "property_label": row[2],
+            "rol": row[3],
+            "tenant_name": row[4],
+            "start_date": row[5],
+            "current_rent": row[6],
+            "payment_day": row[7],
+            "adjustment_frequency": row[8],
+        }
+        for row in rows
+    ]
+
+
+def list_tenants() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.display_name,
+                p.id            AS property_id,
+                p.rol,
+                p.display_name  AS property_label,
+                c.payment_day,
+                c.start_date,
+                rc.amount       AS current_rent,
+                {_LATEST_ADJUSTMENT} AS last_adjustment_date
+            FROM tenants t
+            JOIN contract_tenants ct
+                ON ct.tenant_id = t.id AND ct.is_primary = 1
+            JOIN contracts c
+                ON c.id = ct.contract_id AND c.is_active = 1
+            JOIN properties p
+                ON p.id = c.property_id
+            JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            ORDER BY t.id DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "display_name": row[1],
+            "property_id": row[2],
+            "rol": row[3],
+            "property_label": row[4],
+            "payment_day": row[5],
+            "start_date": row[6],
+            "current_rent": row[7],
+            "last_adjustment_date": row[8],
+        }
+        for row in rows
+    ]
+
+
+def get_contract_for_payment(contract_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT c.id, c.payment_day, rc.amount AS current_rent
+            FROM contracts c
+            JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.id = ? AND c.is_active = 1
+            """,
+            (contract_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {"id": row[0], "payment_day": row[1], "current_rent": row[2]}
+
+
+def insert_payment(
+    contract_id: int,
+    period: str,
+    due_date: str,
+    expected_amount: int,
+    comment: str | None,
+) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payments (contract_id, period, due_date, expected_amount, comment)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (contract_id, period, due_date, expected_amount, comment),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def _payment_row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "contract_id": row[1],
+        "period": row[2],
+        "due_date": row[3],
+        "expected_amount": row[4],
+        "paid_amount": row[5],
+        "paid_at": row[6],
+        "status": row[7],
+        "source": row[8],
+        "comment": row[9],
+        "created_at": row[10],
+    }
+
+
+def list_payments_for_contract(contract_id: int) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payments WHERE contract_id = ? ORDER BY period DESC",
+            (contract_id,),
+        ).fetchall()
+
+    return [_payment_row_to_dict(row) for row in rows]
+
+
+def get_payment(payment_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payments WHERE id = ?",
+            (payment_id,),
+        ).fetchone()
+
+    return _payment_row_to_dict(row) if row else None
+
+
+def update_payment(
+    payment_id: int,
+    paid_amount: int | None,
+    paid_at: str | None,
+    status: str,
+    comment: str | None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE payments
+            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
+            WHERE id = ?
+            """,
+            (paid_amount, paid_at, status, comment, payment_id),
+        )
+        conn.commit()
+
+
+def delete_payment(payment_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
+        conn.commit()
+    return cursor.rowcount > 0

@@ -114,6 +114,25 @@ def init_db():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id     INTEGER NOT NULL REFERENCES contracts(id),
+                period          TEXT    NOT NULL,
+                due_date        TEXT    NOT NULL,
+                expected_amount INTEGER NOT NULL,
+                paid_amount     INTEGER,
+                paid_at         TEXT,
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                source          TEXT    NOT NULL DEFAULT 'manual',
+                comment         TEXT,
+                created_at      TEXT    NOT NULL DEFAULT (date('now')),
+                UNIQUE(contract_id, period)
+            )
+            """
+        )
+
         conn.commit()
 
 
@@ -471,3 +490,106 @@ def list_dashboard_items() -> list[dict]:
             }
         )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Payment queries
+# ---------------------------------------------------------------------------
+
+def get_contract_for_payment(contract_id: int) -> dict | None:
+    """Returns the active contract + its current rent, or None if not found."""
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT c.id, c.property_id, rc.amount AS current_rent
+            FROM contracts c
+            JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.id = ? AND c.is_active = 1
+            """,
+            (contract_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"id": row[0], "property_id": row[1], "current_rent": row[2]}
+
+
+def insert_payment(
+    contract_id: int,
+    period: str,
+    due_date: str,
+    expected_amount: int,
+    comment: str | None,
+) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payments (contract_id, period, due_date, expected_amount, comment)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (contract_id, period, due_date, expected_amount, comment),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def list_payments_for_contract(contract_id: int) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, contract_id, period, due_date, expected_amount,
+                   paid_amount, paid_at, status, source, comment, created_at
+            FROM payments
+            WHERE contract_id = ?
+            ORDER BY period DESC
+            """,
+            (contract_id,),
+        ).fetchall()
+    return [
+        {
+            "id": r[0], "contract_id": r[1], "period": r[2], "due_date": r[3],
+            "expected_amount": r[4], "paid_amount": r[5], "paid_at": r[6],
+            "status": r[7], "source": r[8], "comment": r[9], "created_at": r[10],
+        }
+        for r in rows
+    ]
+
+
+def get_payment(payment_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, contract_id, period, due_date, expected_amount,
+                   paid_amount, paid_at, status, source, comment, created_at
+            FROM payments
+            WHERE id = ?
+            """,
+            (payment_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0], "contract_id": row[1], "period": row[2], "due_date": row[3],
+        "expected_amount": row[4], "paid_amount": row[5], "paid_at": row[6],
+        "status": row[7], "source": row[8], "comment": row[9], "created_at": row[10],
+    }
+
+
+def update_payment(
+    payment_id: int,
+    paid_amount: int | None,
+    paid_at: str | None,
+    status: str,
+    comment: str | None,
+) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
+            WHERE id = ?
+            """,
+            (paid_amount, paid_at, status, comment, payment_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0

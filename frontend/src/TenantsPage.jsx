@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
-import { formatCLP } from './utils'
+import { formatCLP, formatMonthsAgo, formatTenancyYears } from './utils'
 
 const API_URL = 'http://127.0.0.1:8000/tenants'
 
@@ -39,6 +39,7 @@ function TenantsPage({ onPropertySelect }) {
                     <th className="th">Arrendatario</th>
                     <th className="th">Propiedad</th>
                     <th className="th">Desde</th>
+                    <th className="th">Últ. reajuste</th>
                     <th className="th th-right">Renta</th>
                     <th className="th th-center">Día pago</th>
                   </tr>
@@ -57,7 +58,20 @@ function TenantsPage({ onPropertySelect }) {
                         <div>{item.property_label ?? item.rol}</div>
                         <div className="td-sub">{item.rol}</div>
                       </td>
-                      <td className="td td-mono td-muted">{item.start_date ?? '—'}</td>
+                      <td className="td td-mono td-muted">
+                        <div>{item.start_date ?? '—'}</div>
+                        <div className="td-sub">
+                          {formatTenancyYears(item.tenancy_years)}
+                        </div>
+                      </td>
+                      <td className="td td-mono td-muted">
+                        <div>{item.last_adjustment_date ?? '—'}</div>
+                        {item.last_adjustment_date && (
+                          <div className="td-sub">
+                            {formatMonthsAgo(item.months_since_last_adjustment)}
+                          </div>
+                        )}
+                      </td>
                       <td className="td td-right td-mono">{formatCLP(item.current_rent)}</td>
                       <td className="td td-center td-mono">
                         {item.payment_day ?? <span className="text-muted">—</span>}

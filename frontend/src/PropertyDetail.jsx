@@ -1,6 +1,6 @@
 import Topbar from './Topbar'
 import { StatusBadge } from './Badge'
-import { formatCLP, formatFrequency } from './utils'
+import { formatCLP, formatFrequency, formatMonthsAgo } from './utils'
 
 function PropertyDetail({ property: p, onBack }) {
   const isOccupied = p.status === 'occupied'
@@ -49,6 +49,20 @@ function PropertyDetail({ property: p, onBack }) {
                   <KVRow
                     label="Frecuencia reajuste"
                     value={formatFrequency(p.adjustment_frequency)}
+                  />
+                  <KVRow
+                    label="Último reajuste"
+                    value={p.last_adjustment_date ?? '—'}
+                    mono
+                  />
+                  <KVRow
+                    label="Meses desde reajuste"
+                    value={
+                      p.months_since_last_adjustment !== null &&
+                      p.months_since_last_adjustment !== undefined
+                        ? formatMonthsAgo(p.months_since_last_adjustment)
+                        : 'Sin reajustes aún'
+                    }
                   />
                   <KVRow
                     label="Próximo reajuste"

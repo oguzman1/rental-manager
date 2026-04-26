@@ -70,6 +70,16 @@ function App() {
     loadDashboard()
   }, [])
 
+  async function refreshDashboard() {
+    try {
+      const response = await fetch(API_URL)
+      if (!response.ok) return
+      setProperties(await response.json())
+    } catch {
+      // silent — stale data is better than a crash
+    }
+  }
+
   function handleNav(target) {
     setRoute({ name: target })
   }
@@ -137,6 +147,7 @@ function App() {
         <PaymentsView
           contract={route.contract}
           onBack={() => handleNav(route.from || 'contracts')}
+          onPaymentMutation={refreshDashboard}
         />
       )
     }

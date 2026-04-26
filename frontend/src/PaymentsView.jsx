@@ -28,7 +28,7 @@ function deriveDueDate(period, paymentDay) {
   return `${period}-${String(day).padStart(2, '0')}`
 }
 
-function PaymentsView({ contract, onBack }) {
+function PaymentsView({ contract, onBack, onPaymentMutation }) {
   const [payments, setPayments] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -109,10 +109,12 @@ function PaymentsView({ contract, onBack }) {
           'Se creó el período, pero no se pudo marcar como pagado. Puedes editarlo abajo.'
         )
         await loadPayments()
+        await onPaymentMutation?.()
         return
       }
 
       await loadPayments()
+      await onPaymentMutation?.()
     } catch (err) {
       setRegisterError(err.message)
     } finally {
@@ -159,6 +161,7 @@ function PaymentsView({ contract, onBack }) {
       setActiveForm(null)
       setFormError(null)
       await loadPayments()
+      await onPaymentMutation?.()
     } catch (err) {
       setFormError(err.message)
     } finally {
@@ -176,6 +179,7 @@ function PaymentsView({ contract, onBack }) {
       }
       if (!res.ok) throw new Error(`Error ${res.status}`)
       await loadPayments()
+      await onPaymentMutation?.()
     } catch (err) {
       setRegisterError(err.message)
     }
@@ -200,6 +204,7 @@ function PaymentsView({ contract, onBack }) {
       setActiveForm(null)
       setFormError(null)
       await loadPayments()
+      await onPaymentMutation?.()
     } catch (err) {
       setFormError(err.message)
     } finally {

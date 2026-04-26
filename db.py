@@ -229,7 +229,11 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
                     INSERT INTO rent_changes (contract_id, effective_from, amount)
                     VALUES (?, ?, ?)
                     """,
-                    (contract_id, data.rental.start_date.isoformat(), data.rental.current_rent),
+                    (
+                        contract_id,
+                        data.rental.start_date.isoformat(),
+                        data.rental.current_rent,
+                    ),
                 )
 
             conn.commit()
@@ -242,7 +246,6 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
 def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bool:
     try:
         with get_connection() as conn:
-            # a) Update property fields directly.
             cursor = conn.execute(
                 """
                 UPDATE properties
@@ -276,7 +279,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                 if row:
                     contract_id = row[0]
 
-                    # b) Update active contract fields — no new contract is created.
                     conn.execute(
                         """
                         UPDATE contracts
@@ -293,7 +295,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                         ),
                     )
 
-                    # Update primary tenant name in place.
                     tenant_row = conn.execute(
                         """
                         SELECT tenant_id FROM contract_tenants
@@ -308,7 +309,6 @@ def update_managed_property(property_id: int, data: ManagedPropertyCreate) -> bo
                             (data.rental.tenant_name, tenant_row[0]),
                         )
 
-                # Sync display_name with property_label if it changed.
                 conn.execute(
                     "UPDATE properties SET display_name = ? WHERE id = ?",
                     (data.rental.property_label, property_id),
@@ -342,9 +342,6 @@ def delete_managed_property(property_id: int) -> bool:
 # ---------------------------------------------------------------------------
 # Read queries
 #
-# All functions return the same dict shapes as before so main.py and the
-# response models require no changes.
-#
 # The subquery below selects the single latest rent_change per contract,
 # breaking ties by effective_from DESC then id DESC.
 # ---------------------------------------------------------------------------
@@ -353,6 +350,18 @@ _LATEST_RENT = """
     (
         SELECT id FROM rent_changes
         WHERE  contract_id = c.id
+        ORDER  BY effective_from DESC, id DESC
+        LIMIT  1
+    )
+"""
+
+# Un rent_change con effective_from == c.start_date es la renta inicial del contrato,
+# no un reajuste real. Solo effective_from > c.start_date cuenta como reajuste.
+_LATEST_ADJUSTMENT = """
+    (
+        SELECT effective_from FROM rent_changes
+        WHERE  contract_id = c.id
+        AND    effective_from > c.start_date
         ORDER  BY effective_from DESC, id DESC
         LIMIT  1
     )
@@ -383,21 +392,19 @@ def list_managed_properties() -> list[dict]:
             """
         ).fetchall()
 
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "status": row[3],
-                "property_label": row[4],
-                "tenant_name": row[5],
-                "payment_day": row[6],
-                "has_rental": bool(row[7]),
-            }
-        )
-    return results
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "status": row[3],
+            "property_label": row[4],
+            "tenant_name": row[5],
+            "payment_day": row[6],
+            "has_rental": bool(row[7]),
+        }
+        for row in rows
+    ]
 
 
 def list_rentals_for_adjustments() -> list[dict]:
@@ -408,12 +415,13 @@ def list_rentals_for_adjustments() -> list[dict]:
                 p.id,
                 p.rol,
                 p.comuna,
-                p.display_name     AS property_label,
-                t.display_name     AS tenant_name,
+                p.display_name          AS property_label,
+                t.display_name          AS tenant_name,
                 c.payment_day,
-                rc.amount          AS current_rent,
+                rc.amount               AS current_rent,
                 c.adjustment_frequency,
-                c.start_date
+                c.start_date,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
             FROM properties p
             JOIN contracts c
                 ON c.property_id = p.id AND c.is_active = 1
@@ -427,22 +435,21 @@ def list_rentals_for_adjustments() -> list[dict]:
             """
         ).fetchall()
 
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "property_label": row[3],
-                "tenant_name": row[4],
-                "payment_day": row[5],
-                "current_rent": row[6],
-                "adjustment_frequency": row[7],
-                "start_date": row[8],
-            }
-        )
-    return results
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "property_label": row[3],
+            "tenant_name": row[4],
+            "payment_day": row[5],
+            "current_rent": row[6],
+            "adjustment_frequency": row[7],
+            "start_date": row[8],
+            "last_adjustment_date": row[9],
+        }
+        for row in rows
+    ]
 
 
 def list_contracts() -> list[dict]:
@@ -489,6 +496,49 @@ def list_contracts() -> list[dict]:
     ]
 
 
+def list_tenants() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                t.id,
+                t.display_name,
+                p.id                    AS property_id,
+                p.rol,
+                p.display_name          AS property_label,
+                c.payment_day,
+                c.start_date,
+                rc.amount               AS current_rent,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
+            FROM tenants t
+            JOIN contract_tenants ct
+                ON ct.tenant_id = t.id AND ct.is_primary = 1
+            JOIN contracts c
+                ON c.id = ct.contract_id AND c.is_active = 1
+            JOIN properties p
+                ON p.id = c.property_id
+            LEFT JOIN rent_changes rc
+                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            ORDER BY t.id DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "id": row[0],
+            "display_name": row[1],
+            "property_id": row[2],
+            "rol": row[3],
+            "property_label": row[4],
+            "payment_day": row[5],
+            "start_date": row[6],
+            "current_rent": row[7],
+            "last_adjustment_date": row[8],
+        }
+        for row in rows
+    ]
+
+
 def list_dashboard_items() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -498,12 +548,13 @@ def list_dashboard_items() -> list[dict]:
                 p.rol,
                 p.comuna,
                 p.status,
-                p.display_name     AS property_label,
-                t.display_name     AS tenant_name,
+                p.display_name          AS property_label,
+                t.display_name          AS tenant_name,
                 c.payment_day,
-                rc.amount          AS current_rent,
+                rc.amount               AS current_rent,
                 c.adjustment_frequency,
-                c.start_date
+                c.start_date,
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
             FROM properties p
             LEFT JOIN contracts c
                    ON c.property_id = p.id AND c.is_active = 1
@@ -517,23 +568,22 @@ def list_dashboard_items() -> list[dict]:
             """
         ).fetchall()
 
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "id": row[0],
-                "rol": row[1],
-                "comuna": row[2],
-                "status": row[3],
-                "property_label": row[4],
-                "tenant_name": row[5],
-                "payment_day": row[6],
-                "current_rent": row[7],
-                "adjustment_frequency": row[8],
-                "start_date": row[9],
-            }
-        )
-    return results
+    return [
+        {
+            "id": row[0],
+            "rol": row[1],
+            "comuna": row[2],
+            "status": row[3],
+            "property_label": row[4],
+            "tenant_name": row[5],
+            "payment_day": row[6],
+            "current_rent": row[7],
+            "adjustment_frequency": row[8],
+            "start_date": row[9],
+            "last_adjustment_date": row[10],
+        }
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +603,10 @@ def get_contract_for_payment(contract_id: int) -> dict | None:
             """,
             (contract_id,),
         ).fetchone()
+
     if row is None:
         return None
+
     return {
         "id": row[0],
         "property_id": row[1],
@@ -594,7 +646,8 @@ def list_payments_for_contract(contract_id: int) -> list[dict]:
             """,
             (contract_id,),
         ).fetchall()
-    return [_payment_row_to_dict(r) for r in rows]
+
+    return [_payment_row_to_dict(row) for row in rows]
 
 
 def get_payment(payment_id: int) -> dict | None:
@@ -608,8 +661,10 @@ def get_payment(payment_id: int) -> dict | None:
             """,
             (payment_id,),
         ).fetchone()
+
     if row is None:
         return None
+
     return _payment_row_to_dict(row)
 
 

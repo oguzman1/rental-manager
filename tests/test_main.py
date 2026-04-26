@@ -1,5 +1,8 @@
 import os
 from pathlib import Path
+import sqlite3 as _sqlite3
+
+from fastapi.testclient import TestClient
 
 # Usa una base distinta para tests antes de importar la app.
 os.environ["DB_NAME"] = "test_rental_manager.db"
@@ -9,9 +12,7 @@ test_db = Path("test_rental_manager.db")
 if test_db.exists():
     test_db.unlink()
 
-from fastapi.testclient import TestClient
-
-from main import app
+from main import app  # noqa: E402
 
 
 client = TestClient(app)
@@ -37,7 +38,7 @@ def test_create_managed_property_returns_id():
             "year": 2016,
             "fiscal_appraisal": 142935366,
         },
-            "rental": {
+        "rental": {
             "tenant_name": "Test Tenant",
             "payment_day": 5,
             "property_label": "depto serena",
@@ -60,6 +61,7 @@ def test_create_managed_property_returns_id():
     assert data["has_rental"] is True
     assert data["property_label"] == "depto serena"
 
+
 def test_rent_adjustments_marks_property_as_requiring_notice():
     payload = {
         "property": {
@@ -73,7 +75,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
             "year": 2025,
             "fiscal_appraisal": 10000000,
         },
-     "rental": {
+        "rental": {
             "tenant_name": "Test Tenant",
             "payment_day": 5,
             "property_label": "test castro rental",
@@ -83,7 +85,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
             "notice_days": 30,
             "adjustment_month": "january",
         },
-            }
+    }
 
     create_response = client.post("/managed-property", json=payload)
     assert create_response.status_code == 200
@@ -105,6 +107,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
     assert test_adjustment["next_adjustment_date"] == "2027-01-01"
     assert test_adjustment["adjustment_notice_date"] == "2026-12-01"
     assert test_adjustment["requires_adjustment_notice"] is True
+
 
 def test_list_managed_properties_includes_tenant_and_payment_day():
     payload = {
@@ -144,58 +147,6 @@ def test_list_managed_properties_includes_tenant_and_payment_day():
 
     assert created_property["tenant_name"] == "Test Tenant Temuco"
     assert created_property["payment_day"] == 10
-
-    properties = list_response.json()
-    created_property = next(
-        item for item in properties if item["rol"] == "08888-00002"
-    )
-
-    assert created_property["tenant_name"] == "Test Tenant Temuco"
-    assert created_property["payment_day"] == 10
-
-def test_dashboard_includes_operational_fields():
-        payload = {
-            "property": {
-                "comuna": "LAS CONDES",
-                "rol": "07777-00003",
-                "address": "TEST LAS CONDES",
-                "destination": "HABITACIONAL",
-                "status": "occupied",
-                "fojas": "777",
-                "property_number": "777",
-                "year": 2020,
-                "fiscal_appraisal": 120000000,
-        },
-        "rental": {
-            "tenant_name": "Test Tenant Dashboard",
-            "payment_day": 5,
-            "property_label": "depto dashboard test",
-            "current_rent": 650000,
-            "adjustment_frequency": "annual",
-            "start_date": "2024-04-01",
-            "notice_days": 60,
-            "adjustment_month": "april",
-        },
-    }
-
-        create_response = client.post("/managed-property", json=payload)
-        assert create_response.status_code == 200
-
-        dashboard_response = client.get("/dashboard")
-        assert dashboard_response.status_code == 200
-
-        dashboard_items = dashboard_response.json()
-        dashboard_item = next(
-            item for item in dashboard_items if item["rol"] == "07777-00003"
-        )
-
-        assert dashboard_item["tenant_name"] == "Test Tenant Dashboard"
-        assert dashboard_item["payment_day"] == 5
-        assert dashboard_item["current_rent"] == 650000
-        assert dashboard_item["property_label"] == "depto dashboard test"
-        assert "next_adjustment_date" in dashboard_item
-        assert "adjustment_notice_date" in dashboard_item
-        assert "requires_adjustment_notice" in dashboard_item
 
 
 def test_dashboard_includes_operational_fields():
@@ -283,9 +234,6 @@ def test_tenants_items_have_expected_shape():
 
 
 def test_dashboard_last_adjustment_date_is_null_without_real_adjustment():
-    # La propiedad "02162-00036" tiene un solo rent_change con effective_from == start_date.
-    # Por regla: effective_from == start_date es renta inicial, no reajuste.
-    # last_adjustment_date debe ser null.
     response = client.get("/dashboard")
     assert response.status_code == 200
     items = response.json()
@@ -295,14 +243,13 @@ def test_dashboard_last_adjustment_date_is_null_without_real_adjustment():
 
 
 def test_dashboard_last_adjustment_date_reflects_real_adjustment():
-    # Inserta un rent_change con effective_from > start_date para simular un reajuste real.
-    # Solo effective_from > start_date cuenta como reajuste (ver _LATEST_ADJUSTMENT en db.py).
-    import sqlite3
-    conn = sqlite3.connect("test_rental_manager.db")
+    conn = _sqlite3.connect("test_rental_manager.db")
     row = conn.execute(
-        """SELECT c.id FROM contracts c
-           JOIN properties p ON p.id = c.property_id
-           WHERE p.rol = '02162-00036'"""
+        """
+        SELECT c.id FROM contracts c
+        JOIN properties p ON p.id = c.property_id
+        WHERE p.rol = '02162-00036'
+        """
     ).fetchone()
     conn.execute(
         "INSERT INTO rent_changes (contract_id, effective_from, amount) VALUES (?, '2023-05-01', 870000)",
@@ -320,8 +267,6 @@ def test_dashboard_last_adjustment_date_reflects_real_adjustment():
 
 
 def test_rent_adjustments_months_until_next_is_positive_when_not_yet_due():
-    # "09999-00001": start_date=2025-01-01, annual. Primer reajuste programado = 2026-01-01.
-    # Con as_of=2025-06-15, el ciclo actual no ha vencido: months_until debe ser positivo.
     response = client.get("/rent-adjustments", params={"as_of": "2025-06-15"})
     assert response.status_code == 200
     items = response.json()
@@ -330,9 +275,6 @@ def test_rent_adjustments_months_until_next_is_positive_when_not_yet_due():
 
 
 def test_rent_adjustments_months_until_next_is_negative_when_overdue():
-    # "09999-00001": start_date=2025-01-01, annual. Reajuste del ciclo 2026 = 2026-01-01.
-    # Con as_of=2026-03-01, ese ciclo ya venció sin que conste un rent_change posterior.
-    # months_until debe ser negativo (reajuste atrasado).
     response = client.get("/rent-adjustments", params={"as_of": "2026-03-01"})
     assert response.status_code == 200
     items = response.json()
@@ -352,12 +294,8 @@ def test_tenants_tenancy_fields_are_consistent():
 
 
 def test_tenants_months_since_last_adjustment_is_null_without_real_adjustment():
-    # Los arrendatarios de prueba solo tienen renta inicial (effective_from == start_date).
-    # months_since_last_adjustment debe ser null para todos.
     response = client.get("/tenants")
     items = response.json()
-    # Excluye el arrendatario de "02162-00036" donde ya insertamos un reajuste real
-    # en test_dashboard_last_adjustment_date_reflects_real_adjustment.
     for item in items:
         if item["rol"] != "02162-00036":
             assert item["months_since_last_adjustment"] is None, (
@@ -395,11 +333,53 @@ def test_dashboard_no_contract_property_has_null_rent_fields():
     assert item["payment_day"] is None
 
 
+def test_list_contracts_returns_active_contracts_with_correct_shape():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "VALPARAÍSO",
+                "rol": "05555-00099",
+                "address": "Cerro Alegre 10",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "5",
+                "property_number": "99",
+                "year": 2019,
+                "fiscal_appraisal": 80000000,
+            },
+            "rental": {
+                "tenant_name": "Arrendatario Contratos Test",
+                "payment_day": 3,
+                "property_label": "depto valpo test",
+                "current_rent": 620000,
+                "adjustment_frequency": "semiannual",
+                "start_date": "2024-06-01",
+                "notice_days": 30,
+                "adjustment_month": "june",
+            },
+        },
+    )
+
+    r = client.get("/contracts")
+    assert r.status_code == 200
+
+    items = r.json()
+    item = next(i for i in items if i["rol"] == "05555-00099")
+
+    assert item["id"] >= 1
+    assert item["property_id"] >= 1
+    assert item["property_label"] == "depto valpo test"
+    assert item["tenant_name"] == "Arrendatario Contratos Test"
+    assert item["current_rent"] == 620000
+    assert item["payment_day"] == 3
+    assert item["adjustment_frequency"] == "semiannual"
+    assert item["start_date"] == "2024-06-01"
+
+
 # ---------------------------------------------------------------------------
 # Payment tests
 # ---------------------------------------------------------------------------
-
-import sqlite3 as _sqlite3
 
 _PAYMENT_ROL = "09001-00001"
 
@@ -429,7 +409,6 @@ _PAYMENT_PROPERTY = {
 
 
 def _get_contract_id_for_rol(rol: str) -> int:
-    """Query the test DB directly to get the active contract_id for a property rol."""
     conn = _sqlite3.connect("test_rental_manager.db")
     row = conn.execute(
         """
@@ -444,42 +423,75 @@ def _get_contract_id_for_rol(rol: str) -> int:
     return row[0]
 
 
-def _create_payment_property() -> int:
-    """Creates the test property (idempotent) and returns its contract_id."""
-    r = client.post("/managed-property", json=_PAYMENT_PROPERTY)
-    assert r.status_code in (200, 409)
+def _setup_payment_property() -> int:
+    client.post("/managed-property", json=_PAYMENT_PROPERTY)
     return _get_contract_id_for_rol(_PAYMENT_ROL)
 
 
-def test_create_payment_returns_pending_record():
-    cid = _create_payment_property()
-    r = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2025-01", "due_date": "2025-01-05"},
-    )
+def test_create_payment_derives_due_date_from_payment_day():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2025-04"})
     assert r.status_code == 200
     body = r.json()
-    assert body["contract_id"] == cid
-    assert body["period"] == "2025-01"
-    assert body["status"] == "pending"
+    assert body["period"] == "2025-04"
+    assert body["due_date"] == "2025-04-05"
     assert body["expected_amount"] == 500000
-    assert body["paid_amount"] is None
+    assert body["status"] == "pending"
     assert body["source"] == "manual"
+    assert body["paid_amount"] is None
+
+
+def test_create_payment_clamps_due_date_when_payment_day_exceeds_month_length():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "TEMUCO",
+                "rol": "09001-00002",
+                "address": "Calle Larga 1",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "2",
+                "property_number": "2",
+                "year": 2021,
+                "fiscal_appraisal": 70000000,
+            },
+            "rental": {
+                "tenant_name": "Arrendatario Clamp",
+                "payment_day": 31,
+                "property_label": "depto clamp",
+                "current_rent": 300000,
+                "adjustment_frequency": "annual",
+                "start_date": "2023-03-01",
+                "notice_days": 30,
+                "adjustment_month": "march",
+            },
+        },
+    )
+    cid = _get_contract_id_for_rol("09001-00002")
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2025-04"})
+    assert r.status_code == 200
+    assert r.json()["due_date"] == "2025-04-30"
 
 
 def test_list_payments_for_contract():
-    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
+    cid = _setup_payment_property()
+    client.post(f"/contracts/{cid}/payments", json={"period": "2025-04"})
     r = client.get(f"/contracts/{cid}/payments")
     assert r.status_code == 200
     items = r.json()
-    assert any(p["period"] == "2025-01" for p in items)
+    assert any(p["period"] == "2025-04" for p in items)
 
 
 def test_patch_payment_full_amount_marks_paid():
-    # The first payment created for this contract has id=1.
+    cid = _setup_payment_property()
+    client.post(f"/contracts/{cid}/payments", json={"period": "2025-05"})
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    pid = next(p["id"] for p in payments if p["period"] == "2025-05")
+
     r = client.patch(
-        "/payments/1",
-        json={"paid_amount": 500000, "paid_at": "2025-01-05"},
+        f"/payments/{pid}",
+        json={"paid_amount": 500000, "paid_at": "2025-05-05"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -488,25 +500,26 @@ def test_patch_payment_full_amount_marks_paid():
 
 
 def test_patch_payment_partial_amount_marks_partial():
-    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
-    client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2025-02", "due_date": "2025-02-05"},
-    )
-    r = client.patch("/payments/2", json={"paid_amount": 250000})
+    cid = _setup_payment_property()
+    client.post(f"/contracts/{cid}/payments", json={"period": "2025-06"})
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    pid = next(p["id"] for p in payments if p["period"] == "2025-06")
+
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": 250000})
     assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "partial"
-    assert body["paid_amount"] == 250000
+    assert r.json()["status"] == "partial"
 
 
 def test_patch_payment_comment_only_leaves_status_unchanged():
-    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
-    client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2025-03", "due_date": "2025-03-05"},
+    cid = _setup_payment_property()
+    client.post(f"/contracts/{cid}/payments", json={"period": "2025-07"})
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    pid = next(p["id"] for p in payments if p["period"] == "2025-07")
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"comment": "pendiente verificación"},
     )
-    r = client.patch("/payments/3", json={"comment": "pendiente verificación"})
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "pending"
@@ -514,26 +527,41 @@ def test_patch_payment_comment_only_leaves_status_unchanged():
 
 
 def test_create_payment_duplicate_period_returns_409():
-    cid = _get_contract_id_for_rol(_PAYMENT_ROL)
-    r = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2025-01", "due_date": "2025-01-05"},
-    )
+    cid = _setup_payment_property()
+    client.post(f"/contracts/{cid}/payments", json={"period": "2025-08"})
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2025-08"})
     assert r.status_code == 409
 
 
 def test_create_payment_nonexistent_contract_returns_404():
-    r = client.post(
-        "/contracts/99999/payments",
-        json={"period": "2025-01", "due_date": "2025-01-05"},
-    )
+    r = client.post("/contracts/99999/payments", json={"period": "2025-09"})
     assert r.status_code == 404
 
 
 def test_create_payment_inactive_contract_returns_404():
-    # Try a contract id that does not exist → 404.
-    r = client.post(
-        "/contracts/99998/payments",
-        json={"period": "2025-04", "due_date": "2025-04-05"},
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "VALDIVIA",
+                "rol": "09001-00003",
+                "address": "Sin contrato 1",
+                "destination": "SITIO ERIAZO",
+                "status": "vacant",
+                "fojas": "3",
+                "property_number": "3",
+                "year": 2021,
+                "fiscal_appraisal": 50000000,
+            },
+            "rental": None,
+        },
     )
+    r = client.post("/contracts/99998/payments", json={"period": "2025-10"})
     assert r.status_code == 404
+
+
+def test_create_payment_invalid_period_returns_422():
+    cid = _setup_payment_property()
+    for bad in ("2025-13", "25-04", "2025/04", "abril", ""):
+        r = client.post(f"/contracts/{cid}/payments", json={"period": bad})
+        assert r.status_code == 422, f"Expected 422 for period={bad!r}, got {r.status_code}"

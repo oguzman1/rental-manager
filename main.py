@@ -1,6 +1,16 @@
-from fastapi import Body, FastAPI, HTTPException, Query
+from calendar import monthrange
 from datetime import date
 import sqlite3
+
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+
+from adjustments import (
+    calculate_adjustment_notice_date,
+    calculate_due_adjustment_date,
+    calculate_next_adjustment_date,
+    months_between,
+)
 from db import (
     delete_managed_property,
     get_contract_for_payment,
@@ -33,18 +43,13 @@ from models import (
     TenantListItem,
 )
 
-from adjustments import (
-    calculate_adjustment_notice_date,
-    calculate_due_adjustment_date,
-    calculate_next_adjustment_date,
-    months_between,
-)
-from fastapi.middleware.cors import CORSMiddleware
+
+def _derive_due_date(period: str, payment_day: int) -> date:
+    year, month = int(period[:4]), int(period[5:7])
+    last_day = monthrange(year, month)[1]
+    return date(year, month, min(payment_day, last_day))
 
 
-
-
-# Crea la aplicación FastAPI.
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -57,16 +62,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicializa la base al cargar la aplicación.
 init_db()
 
 
-# Endpoint simple para comprobar que la API está viva.
 @app.get("/health", tags=["system"])
 def health():
     return {"status": "ok"}
 
-# Endpoint para listar propiedades guardadas.
+
 @app.get(
     "/managed-properties",
     tags=["managed-properties"],
@@ -76,7 +79,7 @@ def health():
 def get_managed_properties():
     return list_managed_properties()
 
-# Endpoint para mostrar una vista operativa consolidada.
+
 @app.get(
     "/dashboard",
     tags=["dashboard"],
@@ -86,7 +89,6 @@ def get_managed_properties():
 def get_dashboard():
     items = list_dashboard_items()
     today = date.today()
-
     results = []
 
     for item in items:
@@ -103,16 +105,13 @@ def get_dashboard():
         if item["adjustment_frequency"] and item["start_date"]:
             next_adjustment_date = calculate_next_adjustment_date(
                 start_date=date.fromisoformat(item["start_date"]),
-                adjustment_frequency=AdjustmentFrequency(
-                    item["adjustment_frequency"]
-                ),
+                adjustment_frequency=AdjustmentFrequency(item["adjustment_frequency"]),
                 today=today,
             )
 
             adjustment_notice_date = calculate_adjustment_notice_date(
                 next_adjustment_date
             )
-
             requires_adjustment_notice = today >= adjustment_notice_date
 
         results.append(
@@ -137,7 +136,7 @@ def get_dashboard():
 
     return results
 
-# Endpoint para recibir una propiedad gestionada y devolver una respuesta clara.
+
 @app.post(
     "/managed-property",
     tags=["managed-properties"],
@@ -163,65 +162,58 @@ def get_dashboard():
     },
 )
 def create_managed_property(
-data: ManagedPropertyCreate = Body(
-    ...,
-    examples=[
-        {
-            "property": {
-                "comuna": "LA SERENA",
-                "rol": "02162-00036",
-                "address": "BALMACEDA EDIF 1 4095",
-                "destination": "HABITACIONAL",
-                "status": "occupied",
-                "fojas": "2933",
-                "property_number": "2121",
-                "year": 2016,
-                "fiscal_appraisal": 142935366,
-            },
-            "rental": {
-                "tenant_name": "Arrendatario La Serena",
-                "payment_day": 5,
-                "property_label": "depto serena",
-                "current_rent": 801875,
-                "adjustment_frequency": "annual",
-                "start_date": "2022-03-12",
-                "notice_days": 60,
-                "adjustment_month": "march",
-            },
-        }
-    ],
-)
+    data: ManagedPropertyCreate = Body(
+        ...,
+        examples=[
+            {
+                "property": {
+                    "comuna": "LA SERENA",
+                    "rol": "02162-00036",
+                    "address": "BALMACEDA EDIF 1 4095",
+                    "destination": "HABITACIONAL",
+                    "status": "occupied",
+                    "fojas": "2933",
+                    "property_number": "2121",
+                    "year": 2016,
+                    "fiscal_appraisal": 142935366,
+                },
+                "rental": {
+                    "tenant_name": "Arrendatario La Serena",
+                    "payment_day": 5,
+                    "property_label": "depto serena",
+                    "current_rent": 801875,
+                    "adjustment_frequency": "annual",
+                    "start_date": "2022-03-12",
+                    "notice_days": 60,
+                    "adjustment_month": "march",
+                },
+            }
+        ],
+    )
 ):
-    # Regla: si está ocupada, debe traer datos de arriendo.
     if data.property.status == PropertyStatus.occupied and data.rental is None:
         raise HTTPException(
             status_code=400,
-            detail="Occupied properties must include rental data."
+            detail="Occupied properties must include rental data.",
         )
 
-    # Regla: si está vacante, no debe traer datos de arriendo.
     if data.property.status == PropertyStatus.vacant and data.rental is not None:
         raise HTTPException(
             status_code=400,
-            detail="Vacant properties cannot include rental data."
+            detail="Vacant properties cannot include rental data.",
         )
 
-    # Evalúa si el input viene con datos de arriendo.
     has_rental = data.rental is not None
-
-    # Si hay rental, toma el label; si no, deja None.
     property_label = data.rental.property_label if has_rental else None
 
-    # Guarda la propiedad en la base y obtiene el id creado.
     try:
         new_id = insert_managed_property(data)
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409,
-            detail="A property with this rol already exists."
+            detail="A property with this rol already exists.",
         )
 
-    # Devuelve una respuesta validada por el response_model.
     return {
         "id": new_id,
         "message": "managed property saved successfully",
@@ -231,7 +223,7 @@ data: ManagedPropertyCreate = Body(
         "property_label": property_label,
     }
 
-# Endpoint para listar próximos reajustes de arriendo.
+
 @app.get(
     "/rent-adjustments",
     tags=["rent-adjustments"],
@@ -243,15 +235,14 @@ def get_rent_adjustments(
         default=None,
         description="Reference date to evaluate adjustment notices",
     )
-    ):
+):
     rentals = list_rentals_for_adjustments()
     today = as_of or date.today()
-
     results = []
 
     for rental in rentals:
         start = date.fromisoformat(rental["start_date"])
-        freq  = AdjustmentFrequency(rental["adjustment_frequency"])
+        freq = AdjustmentFrequency(rental["adjustment_frequency"])
 
         next_adjustment_date = calculate_next_adjustment_date(
             start_date=start,
@@ -261,7 +252,9 @@ def get_rent_adjustments(
         adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
 
         due_date = calculate_due_adjustment_date(
-            start_date=start, adjustment_frequency=freq, today=today
+            start_date=start,
+            adjustment_frequency=freq,
+            today=today,
         )
         months_until_next = months_between(today, due_date)
 
@@ -288,11 +281,10 @@ def get_rent_adjustments(
                 "months_until_next_adjustment": months_until_next,
             }
         )
-        
 
     return results
 
-# Endpoint para actualizar una propiedad gestionada existente.
+
 @app.put(
     "/managed-property/{property_id}",
     tags=["managed-properties"],
@@ -322,40 +314,33 @@ def update_managed_property_endpoint(
     property_id: int,
     data: ManagedPropertyCreate = Body(...),
 ):
-    # Regla: si está ocupada, debe traer datos de arriendo.
     if data.property.status == PropertyStatus.occupied and data.rental is None:
         raise HTTPException(
             status_code=400,
-            detail="Occupied properties must include rental data."
+            detail="Occupied properties must include rental data.",
         )
 
-    # Regla: si está vacante, no debe traer datos de arriendo.
     if data.property.status == PropertyStatus.vacant and data.rental is not None:
         raise HTTPException(
             status_code=400,
-            detail="Vacant properties cannot include rental data."
+            detail="Vacant properties cannot include rental data.",
         )
 
-    # Evalúa si el input viene con datos de arriendo.
     has_rental = data.rental is not None
-
-    # Si hay rental, toma el label; si no, deja None.
     property_label = data.rental.property_label if has_rental else None
 
-    # Intenta actualizar la propiedad en la base.
     try:
         updated = update_managed_property(property_id, data)
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409,
-            detail="A property with this rol already exists."
+            detail="A property with this rol already exists.",
         )
 
-    # Si no encontró la fila, devuelve 404.
     if not updated:
         raise HTTPException(
             status_code=404,
-            detail="Managed property not found."
+            detail="Managed property not found.",
         )
 
     return {
@@ -367,7 +352,7 @@ def update_managed_property_endpoint(
         "property_label": property_label,
     }
 
-# Endpoint para listar contratos activos.
+
 @app.get(
     "/contracts",
     tags=["contracts"],
@@ -378,7 +363,6 @@ def get_contracts():
     return list_contracts()
 
 
-# Endpoint para listar arrendatarios activos.
 @app.get(
     "/tenants",
     tags=["tenants"],
@@ -389,6 +373,7 @@ def get_tenants():
     items = list_tenants()
     today = date.today()
     results = []
+
     for item in items:
         start_str = item["start_date"]
         start = date.fromisoformat(start_str) if start_str else None
@@ -409,10 +394,10 @@ def get_tenants():
                 "tenancy_years": tenancy_months // 12 if tenancy_months is not None else None,
             }
         )
+
     return results
 
 
-# Endpoint para eliminar una propiedad gestionada existente.
 @app.delete(
     "/managed-property/{property_id}",
     tags=["managed-properties"],
@@ -431,13 +416,12 @@ def delete_managed_property_endpoint(property_id: int):
     if not deleted:
         raise HTTPException(
             status_code=404,
-            detail="Managed property not found."
+            detail="Managed property not found.",
         )
 
     return {"detail": "Managed property deleted successfully."}
 
 
-# Endpoint para registrar un pago manual en un contrato activo.
 @app.post(
     "/contracts/{contract_id}/payments",
     tags=["payments"],
@@ -453,12 +437,14 @@ def create_payment(contract_id: int, data: PaymentCreate):
     if contract is None:
         raise HTTPException(status_code=404, detail="Active contract not found.")
 
+    due_date = _derive_due_date(data.period, contract["payment_day"])
+
     try:
         payment_id = insert_payment(
             contract_id=contract_id,
             period=data.period,
-            due_date=str(data.due_date),
-            expected_amount=contract["current_rent"],  # snapshot at creation time
+            due_date=str(due_date),
+            expected_amount=contract["current_rent"],
             comment=data.comment,
         )
     except sqlite3.IntegrityError:
@@ -470,7 +456,6 @@ def create_payment(contract_id: int, data: PaymentCreate):
     return get_payment(payment_id)
 
 
-# Endpoint para listar todos los pagos de un contrato.
 @app.get(
     "/contracts/{contract_id}/payments",
     tags=["payments"],
@@ -487,11 +472,6 @@ def list_payments(contract_id: int):
     return list_payments_for_contract(contract_id)
 
 
-# Endpoint para registrar el pago efectivo (o nota) sobre un pago existente.
-# Regla de derivación de status:
-#   - sin paid_amount en registro y sin nuevo paid_amount → status sin cambio
-#   - paid_amount >= expected_amount                      → paid
-#   - paid_amount > 0                                     → partial
 @app.patch(
     "/payments/{payment_id}",
     tags=["payments"],
@@ -506,7 +486,9 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     if payment is None:
         raise HTTPException(status_code=404, detail="Payment not found.")
 
-    paid_amount = data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
+    paid_amount = (
+        data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
+    )
     paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
     comment = data.comment if data.comment is not None else payment["comment"]
 

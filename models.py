@@ -1,7 +1,7 @@
 from datetime import date
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # Catálogo de estados permitidos para una propiedad.
@@ -86,6 +86,68 @@ class RentAdjustmentItem(BaseModel):
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     months_until_next_adjustment: int | None = None
+
+# Modelo para listar contratos activos con datos operativos mínimos.
+class ContractListItem(BaseModel):
+    id: int
+    property_id: int
+    property_label: str
+    rol: str
+    tenant_name: str
+    start_date: date
+    current_rent: int
+    payment_day: int
+    adjustment_frequency: AdjustmentFrequency
+
+# Catálogo de estados posibles para un pago.
+class PaymentStatus(str, Enum):
+    pending = "pending"
+    partial = "partial"
+    paid    = "paid"
+
+
+# Catálogo de orígenes de un pago (sólo manual por ahora).
+class PaymentSource(str, Enum):
+    manual = "manual"
+
+
+# Modelo de entrada para crear un pago manual.
+# due_date y expected_amount son derivados internamente por el backend.
+class PaymentCreate(BaseModel):
+    period: str
+    comment: str | None = None
+
+    @field_validator("period")
+    @classmethod
+    def period_must_be_yyyy_mm(cls, v: str) -> str:
+        import re
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", v):
+            raise ValueError("period must be in YYYY-MM format (e.g. 2025-04)")
+        return v
+
+
+# Modelo de entrada para actualizar un pago.
+# status no es editable: el backend lo deriva de paid_amount.
+class PaymentUpdate(BaseModel):
+    paid_amount: int | None = None
+    paid_at: date | None = None
+    comment: str | None = None
+
+
+# Modelo de salida para un pago.
+class PaymentResponse(BaseModel):
+    id: int
+    contract_id: int
+    period: str
+    due_date: date
+    expected_amount: int
+    paid_amount: int | None = None
+    paid_at: date | None = None
+    status: PaymentStatus
+    source: PaymentSource
+    comment: str | None = None
+    created_at: date
+
 
 # Modelo para mostrar una vista operativa consolidada de propiedades y arriendos.
 class DashboardItem(BaseModel):

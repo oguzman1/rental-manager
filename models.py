@@ -175,3 +175,22 @@ class PaymentResponse(BaseModel):
     source: PaymentSource
     comment: str | None = None
     created_at: date
+
+
+class TenantCreate(BaseModel):
+    display_name: str
+    tenant_type: str | None = None
+    tax_id: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    notes: str | None = None
+
+
+class TenantDetailResponse(BaseModel):
+    id: int
+    display_name: str
+    tenant_type: str | None = None
+    tax_id: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    notes: str | None = None

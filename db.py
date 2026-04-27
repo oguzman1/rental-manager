@@ -591,13 +591,13 @@ def list_tenants() -> list[dict]:
                 rc.amount       AS current_rent,
                 {_LATEST_ADJUSTMENT} AS last_adjustment_date
             FROM tenants t
-            JOIN contract_tenants ct
+            LEFT JOIN contract_tenants ct
                 ON ct.tenant_id = t.id AND ct.is_primary = 1
-            JOIN contracts c
+            LEFT JOIN contracts c
                 ON c.id = ct.contract_id AND c.is_active = 1
-            JOIN properties p
+            LEFT JOIN properties p
                 ON p.id = c.property_id
-            JOIN rent_changes rc
+            LEFT JOIN rent_changes rc
                 ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
             ORDER BY t.id DESC
             """
@@ -617,6 +617,79 @@ def list_tenants() -> list[dict]:
         }
         for row in rows
     ]
+
+
+def get_tenant(tenant_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, display_name, tenant_type, tax_id, email, phone, notes
+            FROM tenants WHERE id = ?
+            """,
+            (tenant_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "display_name": row[1],
+        "tenant_type": row[2],
+        "tax_id": row[3],
+        "email": row[4],
+        "phone": row[5],
+        "notes": row[6],
+    }
+
+
+def insert_tenant(data) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO tenants (display_name, tenant_type, tax_id, email, phone, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (data.display_name, data.tenant_type, data.tax_id,
+             data.email, data.phone, data.notes),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def update_tenant(tenant_id: int, data) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE tenants
+            SET display_name = ?, tenant_type = ?, tax_id = ?, email = ?, phone = ?, notes = ?
+            WHERE id = ?
+            """,
+            (data.display_name, data.tenant_type, data.tax_id,
+             data.email, data.phone, data.notes, tenant_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+def tenant_has_active_contract(tenant_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM contract_tenants ct
+            JOIN contracts c ON c.id = ct.contract_id AND c.is_active = 1
+            WHERE ct.tenant_id = ?
+            LIMIT 1
+            """,
+            (tenant_id,),
+        ).fetchone()
+    return row is not None
+
+
+def delete_tenant(tenant_id: int) -> bool:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM contract_tenants WHERE tenant_id = ?", (tenant_id,))
+        cursor = conn.execute("DELETE FROM tenants WHERE id = ?", (tenant_id,))
+        conn.commit()
+    return cursor.rowcount > 0
 
 
 def get_contract_for_payment(contract_id: int) -> dict | None:

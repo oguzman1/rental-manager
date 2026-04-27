@@ -14,20 +14,25 @@ from adjustments import (
 from db import (
     delete_managed_property,
     delete_payment,
+    delete_tenant,
     get_contract_for_payment,
     get_managed_property,
     get_payment,
+    get_tenant,
     init_db,
     insert_managed_property,
     insert_payment,
+    insert_tenant,
     list_contracts,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
     list_rentals_for_adjustments,
     list_tenants,
+    tenant_has_active_contract,
     update_managed_property,
     update_payment,
+    update_tenant,
 )
 from models import (
     AdjustmentFrequency,
@@ -45,6 +50,8 @@ from models import (
     PropertyStatus,
     RentAdjustmentItem,
     RentalInfo,
+    TenantCreate,
+    TenantDetailResponse,
     TenantListItem,
 )
 
@@ -447,6 +454,70 @@ def get_tenants():
         )
 
     return results
+
+
+@app.get(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Get a tenant by ID",
+    response_model=TenantDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+    },
+)
+def get_tenant_endpoint(tenant_id: int):
+    tenant = get_tenant(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return tenant
+
+
+@app.post(
+    "/tenants",
+    tags=["tenants"],
+    summary="Create a standalone tenant",
+    response_model=TenantDetailResponse,
+)
+def create_tenant(data: TenantCreate):
+    new_id = insert_tenant(data)
+    return get_tenant(new_id)
+
+
+@app.patch(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Update a tenant",
+    response_model=TenantDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+    },
+)
+def update_tenant_endpoint(tenant_id: int, data: TenantCreate):
+    if not update_tenant(tenant_id, data):
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return get_tenant(tenant_id)
+
+
+@app.delete(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Delete a tenant",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+        409: {"model": ErrorResponse, "description": "Tenant has an active contract"},
+    },
+)
+def delete_tenant_endpoint(tenant_id: int):
+    if get_tenant(tenant_id) is None:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    if tenant_has_active_contract(tenant_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a tenant with an active contract.",
+        )
+    delete_tenant(tenant_id)
+    return Response(status_code=204)
 
 
 @app.delete(

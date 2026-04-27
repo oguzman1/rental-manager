@@ -834,3 +834,89 @@ def test_delete_managed_property_also_removes_payments():
     ).fetchall()
     conn.close()
     assert payments == [], "Los pagos deben eliminarse al borrar la propiedad"
+
+
+# --- FASE 2: Arrendatarios CRUD ---
+
+def test_create_standalone_tenant():
+    r = client.post("/tenants", json={"display_name": "Arrendatario Standalone"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] >= 1
+    assert body["display_name"] == "Arrendatario Standalone"
+
+
+def test_create_tenant_missing_display_name_returns_422():
+    r = client.post("/tenants", json={})
+    assert r.status_code == 422
+
+
+def test_list_tenants_includes_standalone_tenant():
+    client.post("/tenants", json={"display_name": "Arrendatario Sin Contrato"})
+    r = client.get("/tenants")
+    assert r.status_code == 200
+    items = r.json()
+    standalone = next((i for i in items if i["display_name"] == "Arrendatario Sin Contrato"), None)
+    assert standalone is not None
+    assert standalone["property_id"] is None
+    assert standalone["rol"] is None
+    assert standalone["current_rent"] is None
+    assert standalone["start_date"] is None
+    assert standalone["tenancy_months"] is None
+
+
+def test_get_tenant_by_id_returns_tenant():
+    r = client.post("/tenants", json={"display_name": "Arrendatario Get Test"})
+    tenant_id = r.json()["id"]
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == tenant_id
+    assert body["display_name"] == "Arrendatario Get Test"
+
+
+def test_get_tenant_not_found_returns_404():
+    r = client.get("/tenants/99999")
+    assert r.status_code == 404
+
+
+def test_update_tenant_display_name():
+    r = client.post("/tenants", json={"display_name": "Nombre Original"})
+    tenant_id = r.json()["id"]
+    r = client.patch(f"/tenants/{tenant_id}", json={"display_name": "Nombre Actualizado"})
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "Nombre Actualizado"
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.json()["display_name"] == "Nombre Actualizado"
+
+
+def test_update_tenant_not_found_returns_404():
+    r = client.patch("/tenants/99999", json={"display_name": "Nadie"})
+    assert r.status_code == 404
+
+
+def test_delete_standalone_tenant_returns_204():
+    r = client.post("/tenants", json={"display_name": "Arrendatario A Borrar"})
+    tenant_id = r.json()["id"]
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 204
+    assert r.content == b""
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.status_code == 404
+
+
+def test_delete_tenant_with_active_contract_returns_409():
+    props = client.get("/managed-properties").json()
+    tenant_with_contract = next(
+        p for p in props if p["has_rental"] and p["rol"] == "02162-00036"
+    )
+    tenants = client.get("/tenants").json()
+    tenant = next(t for t in tenants if t["rol"] == "02162-00036")
+    r = client.delete(f"/tenants/{tenant['id']}")
+    assert r.status_code == 409
+    assert "active contract" in r.json()["detail"]
+
+
+def test_delete_tenant_not_found_returns_404():
+    r = client.delete("/tenants/99999")
+    assert r.status_code == 404

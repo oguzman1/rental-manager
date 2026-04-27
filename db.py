@@ -445,6 +445,7 @@ def list_dashboard_items() -> list[dict]:
                 WHERE    period = strftime('%Y-%m', 'now')
                 GROUP BY contract_id
             ) cp ON c.id = cp.contract_id
+            WHERE p.parent_property_id IS NULL
             ORDER BY p.id DESC
             """
         ).fetchall()

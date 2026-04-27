@@ -23,7 +23,10 @@ def main():
     with open(SEED_PATH) as f:
         entries = json.load(f)
 
+    rol_to_id = {}
     inserted = 0
+
+    # Paso 1: insertar todas las propiedades y construir mapa rol → id
     for entry in entries:
         prop = entry["property"]
         contracts = entry.get("contracts", [])
@@ -52,6 +55,7 @@ def main():
                     ),
                 )
                 property_id = cursor.lastrowid
+                rol_to_id[prop["rol"]] = property_id
 
                 for contract_entry in contracts:
                     c = contract_entry["contract"]
@@ -124,6 +128,28 @@ def main():
 
         except Exception as e:
             print(f"✗ {prop['rol']} — {e}")
+
+    # Paso 2: resolver parent_property_id para unidades accesorias
+    parents_to_set = [
+        (entry["property"]["rol"], entry["property"]["parent_rol"])
+        for entry in entries
+        if "parent_rol" in entry["property"]
+    ]
+
+    if parents_to_set:
+        print()
+        with db.get_connection() as conn:
+            for rol, parent_rol in parents_to_set:
+                if parent_rol not in rol_to_id:
+                    raise ValueError(
+                        f"parent_rol '{parent_rol}' not found for property '{rol}'"
+                    )
+                conn.execute(
+                    "UPDATE properties SET parent_property_id = ? WHERE id = ?",
+                    (rol_to_id[parent_rol], rol_to_id[rol]),
+                )
+                print(f"  parent: {rol} → {parent_rol}")
+            conn.commit()
 
     print(f"\n{inserted} de {len(entries)} propiedades insertadas.")
 

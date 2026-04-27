@@ -708,3 +708,581 @@ def test_dashboard_current_payment_status_paid():
     item = next(i for i in items if i["rol"] == "09006-00001")
 
     assert item["current_payment_status"] == "paid"
+
+
+# --- GET /managed-property/{id} ---
+
+def test_get_managed_property_by_id_returns_occupied_with_rental():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "ANTOFAGASTA",
+                "rol": "10001-00001",
+                "address": "Matta 100",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "10",
+                "property_number": "10",
+                "year": 2020,
+                "fiscal_appraisal": 80000000,
+            },
+            "rental": {
+                "tenant_name": "Inquilino Detail",
+                "payment_day": 7,
+                "property_label": "depto antofagasta",
+                "current_rent": 450000,
+                "adjustment_frequency": "annual",
+                "start_date": "2023-06-01",
+                "notice_days": 30,
+                "adjustment_month": "june",
+            },
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10001-00001")
+
+    r = client.get(f"/managed-property/{pid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["id"] == pid
+    assert data["property"]["rol"] == "10001-00001"
+    assert data["property"]["status"] == "occupied"
+    assert data["rental"]["tenant_name"] == "Inquilino Detail"
+    assert data["rental"]["payment_day"] == 7
+    assert data["rental"]["current_rent"] == 450000
+    assert data["rental"]["adjustment_month"] == "june"
+
+
+def test_get_managed_property_by_id_returns_vacant_with_null_rental():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "ARICA",
+                "rol": "10002-00001",
+                "address": "Lynch 200",
+                "destination": "SITIO ERIAZO",
+                "status": "vacant",
+                "fojas": None,
+                "property_number": None,
+                "year": None,
+                "fiscal_appraisal": None,
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10002-00001")
+
+    r = client.get(f"/managed-property/{pid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["property"]["status"] == "vacant"
+    assert data["rental"] is None
+
+
+def test_get_managed_property_by_id_not_found():
+    r = client.get("/managed-property/99999")
+    assert r.status_code == 404
+
+
+# --- DELETE cascade includes payments ---
+
+def test_delete_managed_property_also_removes_payments():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "RANCAGUA",
+                "rol": "10003-00001",
+                "address": "O'Higgins 300",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "20",
+                "property_number": "20",
+                "year": 2018,
+                "fiscal_appraisal": 70000000,
+            },
+            "rental": {
+                "tenant_name": "Inquilino Cascade",
+                "payment_day": 5,
+                "property_label": "depto rancagua",
+                "current_rent": 380000,
+                "adjustment_frequency": "annual",
+                "start_date": "2022-01-01",
+                "notice_days": 30,
+                "adjustment_month": "january",
+            },
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10003-00001")
+    contracts = client.get("/contracts").json()
+    cid = next(c["id"] for c in contracts if c["rol"] == "10003-00001")
+
+    client.post(f"/contracts/{cid}/payments", json={"period": "2024-01"})
+    client.post(f"/contracts/{cid}/payments", json={"period": "2024-02"})
+
+    r = client.delete(f"/managed-property/{pid}")
+    assert r.status_code == 200
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect("test_rental_manager.db")
+    payments = conn.execute(
+        "SELECT id FROM payments WHERE contract_id = ?", (cid,)
+    ).fetchall()
+    conn.close()
+    assert payments == [], "Los pagos deben eliminarse al borrar la propiedad"
+
+
+# --- FASE 2: Arrendatarios CRUD ---
+
+def test_create_standalone_tenant():
+    r = client.post("/tenants", json={"display_name": "Arrendatario Standalone"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] >= 1
+    assert body["display_name"] == "Arrendatario Standalone"
+
+
+def test_create_tenant_missing_display_name_returns_422():
+    r = client.post("/tenants", json={})
+    assert r.status_code == 422
+
+
+def test_list_tenants_includes_standalone_tenant():
+    client.post("/tenants", json={"display_name": "Arrendatario Sin Contrato"})
+    r = client.get("/tenants")
+    assert r.status_code == 200
+    items = r.json()
+    standalone = next((i for i in items if i["display_name"] == "Arrendatario Sin Contrato"), None)
+    assert standalone is not None
+    assert standalone["property_id"] is None
+    assert standalone["rol"] is None
+    assert standalone["current_rent"] is None
+    assert standalone["start_date"] is None
+    assert standalone["tenancy_months"] is None
+
+
+def test_get_tenant_by_id_returns_tenant():
+    r = client.post("/tenants", json={"display_name": "Arrendatario Get Test"})
+    tenant_id = r.json()["id"]
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == tenant_id
+    assert body["display_name"] == "Arrendatario Get Test"
+
+
+def test_get_tenant_not_found_returns_404():
+    r = client.get("/tenants/99999")
+    assert r.status_code == 404
+
+
+def test_update_tenant_display_name():
+    r = client.post("/tenants", json={"display_name": "Nombre Original"})
+    tenant_id = r.json()["id"]
+    r = client.patch(f"/tenants/{tenant_id}", json={"display_name": "Nombre Actualizado"})
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "Nombre Actualizado"
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.json()["display_name"] == "Nombre Actualizado"
+
+
+def test_update_tenant_not_found_returns_404():
+    r = client.patch("/tenants/99999", json={"display_name": "Nadie"})
+    assert r.status_code == 404
+
+
+def test_delete_standalone_tenant_returns_204():
+    r = client.post("/tenants", json={"display_name": "Arrendatario A Borrar"})
+    tenant_id = r.json()["id"]
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 204
+    assert r.content == b""
+    r = client.get(f"/tenants/{tenant_id}")
+    assert r.status_code == 404
+
+
+def test_delete_tenant_with_active_contract_returns_409():
+    tenants = client.get("/tenants").json()
+    tenant = next(t for t in tenants if t["rol"] == "02162-00036")
+    r = client.delete(f"/tenants/{tenant['id']}")
+    assert r.status_code == 409
+    assert "contract" in r.json()["detail"]
+
+
+def test_delete_tenant_not_found_returns_404():
+    r = client.delete("/tenants/99999")
+    assert r.status_code == 404
+
+
+# --- FASE 3: Contratos CRUD ---
+
+_f3_seq = 0
+
+
+def _setup_contract_scenario() -> tuple[int, int, int]:
+    """Returns (property_id, tenant_id, contract_id). Each call uses a unique ROL."""
+    global _f3_seq
+    _f3_seq += 1
+    rol = f"08001-{_f3_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "CONCEPCIÓN",
+                "rol": rol,
+                "address": f"Freire {_f3_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+                "fojas": "801",
+                "property_number": "801",
+                "year": 2018,
+                "fiscal_appraisal": 90000000,
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": f"Arrendatario Fase3-{_f3_seq}"})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "adjustment_month": "january",
+            "current_rent": 700000,
+            "comment": "contrato test fase3",
+        },
+    )
+    assert r.status_code == 200, f"create_contract failed: {r.json()}"
+    return prop["id"], tenant_id, r.json()["id"]
+
+
+def test_create_contract_returns_detail():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == contract_id
+    assert body["current_rent"] == 700000
+    assert body["payment_day"] == 5
+    assert body["adjustment_frequency"] == "annual"
+    assert body["notice_days"] == 30
+    assert body["adjustment_month"] == "january"
+    assert body["comment"] == "contrato test fase3"
+    assert body["is_active"] is True
+    assert body["end_date"] is None
+
+
+def test_create_contract_marks_property_as_occupied():
+    prop_id, _, _ = _setup_contract_scenario()
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["id"] == prop_id)
+    assert prop["status"] == "occupied"
+
+
+def test_create_contract_duplicate_active_returns_409():
+    prop_id, tenant_id, _ = _setup_contract_scenario()
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop_id,
+            "tenant_id": tenant_id,
+            "start_date": "2024-06-01",
+            "payment_day": 10,
+            "notice_days": 60,
+            "adjustment_frequency": "semiannual",
+            "current_rent": 800000,
+        },
+    )
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.json()}"
+
+
+def test_create_contract_property_not_found_returns_404():
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": 99999,
+            "tenant_id": 1,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 0,
+            "adjustment_frequency": "annual",
+            "current_rent": 500000,
+        },
+    )
+    assert r.status_code == 404
+
+
+def test_get_contract_not_found_returns_404():
+    r = client.get("/contracts/99999")
+    assert r.status_code == 404
+
+
+def test_update_contract_payment_day():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(f"/contracts/{contract_id}", json={"payment_day": 15})
+    assert r.status_code == 200
+    assert r.json()["payment_day"] == 15
+
+
+def test_update_contract_rent_inserts_new_rent_change():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(f"/contracts/{contract_id}", json={"current_rent": 750000})
+    assert r.status_code == 200
+    assert r.json()["current_rent"] == 750000
+
+
+def test_update_contract_not_found_returns_404():
+    r = client.patch("/contracts/99999", json={"payment_day": 10})
+    assert r.status_code == 404
+
+
+def test_close_contract_sets_inactive_and_property_vacant():
+    prop_id, _, contract_id = _setup_contract_scenario()
+    r = client.patch(
+        f"/contracts/{contract_id}/close",
+        json={"end_date": "2024-12-31"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_active"] is False
+    assert body["end_date"] == "2024-12-31"
+
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["id"] == prop_id)
+    assert prop["status"] == "vacant"
+
+
+def test_close_contract_excluded_from_list():
+    _, _, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    contracts = client.get("/contracts").json()
+    assert not any(c["id"] == contract_id for c in contracts)
+
+
+def test_close_contract_end_date_before_start_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(
+        f"/contracts/{contract_id}/close",
+        json={"end_date": "2023-01-01"},
+    )
+    assert r.status_code == 400
+
+
+def test_close_contract_not_found_returns_404():
+    r = client.patch("/contracts/99999/close", json={"end_date": "2024-12-31"})
+    assert r.status_code == 404
+
+
+def test_close_already_closed_contract_returns_404():
+    _, _, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    assert r.status_code == 404
+
+
+def test_delete_tenant_with_historical_contract_returns_409():
+    _, tenant_id, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 409
+    assert "contract" in r.json()["detail"]
+
+
+def test_list_contracts_includes_notice_days_and_comment():
+    _, _, contract_id = _setup_contract_scenario()
+    contracts = client.get("/contracts").json()
+    contract = next((c for c in contracts if c["id"] == contract_id), None)
+    assert contract is not None
+    assert "notice_days" in contract
+    assert "adjustment_month" in contract
+    assert "comment" in contract
+
+
+# --- FASE 4: Reajustes / rent_changes ---
+
+def test_rent_adjustments_include_contract_id():
+    r = client.get("/rent-adjustments")
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) > 0
+    for item in items:
+        assert "contract_id" in item
+        assert isinstance(item["contract_id"], int)
+
+
+def test_list_rent_changes_returns_history():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}/rent-changes")
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) == 1
+    assert items[0]["amount"] == 700000
+    assert items[0]["contract_id"] == contract_id
+
+
+def test_list_rent_changes_contract_not_found_returns_404():
+    r = client.get("/contracts/99999/rent-changes")
+    assert r.status_code == 404
+
+
+def test_create_rent_change_success():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-01-01", "amount": 750000},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["amount"] == 750000
+    assert body["effective_from"] == "2025-01-01"
+    assert body["contract_id"] == contract_id
+
+
+def test_create_rent_change_reflects_in_list():
+    _, _, contract_id = _setup_contract_scenario()
+    client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-01-01", "amount": 760000, "adjustment_pct": 5.2},
+    )
+    items = client.get(f"/contracts/{contract_id}/rent-changes").json()
+    assert len(items) == 2
+    latest = items[0]
+    assert latest["amount"] == 760000
+    assert latest["adjustment_pct"] == 5.2
+
+
+def test_create_rent_change_amount_zero_returns_422():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-01-01", "amount": 0},
+    )
+    assert r.status_code == 422
+
+
+def test_create_rent_change_contract_not_found_returns_404():
+    r = client.post(
+        "/contracts/99999/rent-changes",
+        json={"effective_from": "2025-01-01", "amount": 700000},
+    )
+    assert r.status_code == 404
+
+
+def test_create_rent_change_inactive_contract_returns_404():
+    _, _, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-01-01", "amount": 750000},
+    )
+    assert r.status_code == 404
+
+
+def test_create_rent_change_effective_from_before_start_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2023-01-01", "amount": 750000},
+    )
+    assert r.status_code == 400
+
+
+def test_create_rent_change_before_latest_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 750000},
+    )
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-03-01", "amount": 760000},
+    )
+    assert r.status_code == 400
+
+
+def test_create_rent_change_same_date_as_latest_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 750000},
+    )
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 760000},
+    )
+    assert r.status_code == 400
+
+
+def test_delete_rent_change_last_of_many_returns_204():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 750000},
+    )
+    assert r.status_code == 201
+    rc_id = r.json()["id"]
+
+    r = client.delete(f"/rent-changes/{rc_id}")
+    assert r.status_code == 204
+    assert r.content == b""
+
+
+def test_delete_rent_change_actually_removes_it():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 750000},
+    )
+    rc_id = r.json()["id"]
+    client.delete(f"/rent-changes/{rc_id}")
+
+    items = client.get(f"/contracts/{contract_id}/rent-changes").json()
+    assert not any(item["id"] == rc_id for item in items)
+    assert len(items) == 1
+
+
+def test_delete_rent_change_only_one_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    items = client.get(f"/contracts/{contract_id}/rent-changes").json()
+    assert len(items) == 1
+    rc_id = items[0]["id"]
+
+    r = client.delete(f"/rent-changes/{rc_id}")
+    assert r.status_code == 400
+
+
+def test_delete_rent_change_intermediate_returns_409():
+    _, _, contract_id = _setup_contract_scenario()
+    client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2025-06-01", "amount": 750000},
+    )
+    client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2026-06-01", "amount": 800000},
+    )
+    items = client.get(f"/contracts/{contract_id}/rent-changes").json()
+    # items are ordered DESC, so items[1] is the middle one
+    middle_id = items[1]["id"]
+
+    r = client.delete(f"/rent-changes/{middle_id}")
+    assert r.status_code == 409
+
+
+def test_delete_rent_change_not_found_returns_404():
+    r = client.delete("/rent-changes/99999")
+    assert r.status_code == 404

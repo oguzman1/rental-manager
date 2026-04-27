@@ -12,25 +12,43 @@ from adjustments import (
     months_between,
 )
 from db import (
+    close_contract,
+    create_contract,
     delete_managed_property,
     delete_payment,
+    delete_rent_change,
+    delete_tenant,
+    get_contract,
     get_contract_for_payment,
+    get_managed_property,
     get_payment,
+    get_rent_change,
+    get_tenant,
     init_db,
     insert_managed_property,
     insert_payment,
+    insert_rent_change,
+    insert_tenant,
     list_contracts,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
+    list_rent_changes,
     list_rentals_for_adjustments,
     list_tenants,
+    tenant_has_any_contract,
+    update_contract,
     update_managed_property,
     update_payment,
+    update_tenant,
 )
 from models import (
     AdjustmentFrequency,
+    ContractCloseRequest,
+    ContractCreate,
+    ContractDetailResponse,
     ContractListItem,
+    ContractUpdate,
     DashboardItem,
     ErrorResponse,
     ManagedPropertyCreate,
@@ -39,8 +57,15 @@ from models import (
     PaymentCreate,
     PaymentResponse,
     PaymentUpdate,
+    PropertyDetailResponse,
+    PropertyInfo,
     PropertyStatus,
     RentAdjustmentItem,
+    RentChangeCreate,
+    RentChangeItem,
+    RentalInfo,
+    TenantCreate,
+    TenantDetailResponse,
     TenantListItem,
 )
 
@@ -79,6 +104,52 @@ def health():
 )
 def get_managed_properties():
     return list_managed_properties()
+
+
+@app.get(
+    "/managed-property/{property_id}",
+    tags=["managed-properties"],
+    summary="Get a managed property by ID",
+    response_model=PropertyDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Managed property not found"},
+    },
+)
+def get_managed_property_endpoint(property_id: int):
+    data = get_managed_property(property_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Managed property not found.")
+
+    property_info = PropertyInfo(
+        rol=data["rol"],
+        comuna=data["comuna"],
+        address=data["address"],
+        destination=data["destination"],
+        status=data["status"],
+        fojas=data["fojas"],
+        property_number=data["property_number"],
+        year=data["year"],
+        fiscal_appraisal=data["fiscal_appraisal"],
+    )
+
+    rental_info = None
+    if data["payment_day"] is not None:
+        rental_info = RentalInfo(
+            tenant_name=data["tenant_name"],
+            payment_day=data["payment_day"],
+            property_label=data["property_label"],
+            current_rent=data["current_rent"],
+            adjustment_frequency=data["adjustment_frequency"],
+            start_date=data["start_date"],
+            notice_days=data["notice_days"],
+            adjustment_month=data["adjustment_month"],
+        )
+
+    return PropertyDetailResponse(
+        id=data["id"],
+        property=property_info,
+        rental=rental_info,
+    )
 
 
 @app.get(
@@ -268,6 +339,7 @@ def get_rent_adjustments(
         results.append(
             {
                 "id": rental["id"],
+                "contract_id": rental["contract_id"],
                 "rol": rental["rol"],
                 "comuna": rental["comuna"],
                 "property_label": rental["property_label"],
@@ -365,6 +437,80 @@ def get_contracts():
 
 
 @app.get(
+    "/contracts/{contract_id}",
+    tags=["contracts"],
+    summary="Get a contract by ID",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found"},
+    },
+)
+def get_contract_endpoint(contract_id: int):
+    contract = get_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Contract not found.")
+    return contract
+
+
+@app.post(
+    "/contracts",
+    tags=["contracts"],
+    summary="Create a new contract",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Property or tenant not found"},
+        409: {"model": ErrorResponse, "description": "Property already has an active contract"},
+    },
+)
+def create_contract_endpoint(data: ContractCreate):
+    try:
+        contract_id = create_contract(data)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return get_contract(contract_id)
+
+
+@app.patch(
+    "/contracts/{contract_id}",
+    tags=["contracts"],
+    summary="Update an active contract",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def update_contract_endpoint(contract_id: int, data: ContractUpdate):
+    if not update_contract(contract_id, data):
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    return get_contract(contract_id)
+
+
+@app.patch(
+    "/contracts/{contract_id}/close",
+    tags=["contracts"],
+    summary="Close a contract",
+    response_model=ContractDetailResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "end_date before start_date"},
+        404: {"model": ErrorResponse, "description": "Contract not found or already inactive"},
+    },
+)
+def close_contract_endpoint(contract_id: int, data: ContractCloseRequest):
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    if data.end_date < date.fromisoformat(contract["start_date"]):
+        raise HTTPException(
+            status_code=400,
+            detail="end_date must be on or after the contract start_date.",
+        )
+    close_contract(contract_id, str(data.end_date))
+    return get_contract(contract_id)
+
+
+@app.get(
     "/tenants",
     tags=["tenants"],
     summary="List active tenants",
@@ -397,6 +543,70 @@ def get_tenants():
         )
 
     return results
+
+
+@app.get(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Get a tenant by ID",
+    response_model=TenantDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+    },
+)
+def get_tenant_endpoint(tenant_id: int):
+    tenant = get_tenant(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return tenant
+
+
+@app.post(
+    "/tenants",
+    tags=["tenants"],
+    summary="Create a standalone tenant",
+    response_model=TenantDetailResponse,
+)
+def create_tenant(data: TenantCreate):
+    new_id = insert_tenant(data)
+    return get_tenant(new_id)
+
+
+@app.patch(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Update a tenant",
+    response_model=TenantDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+    },
+)
+def update_tenant_endpoint(tenant_id: int, data: TenantCreate):
+    if not update_tenant(tenant_id, data):
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    return get_tenant(tenant_id)
+
+
+@app.delete(
+    "/tenants/{tenant_id}",
+    tags=["tenants"],
+    summary="Delete a tenant",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse, "description": "Tenant not found"},
+        409: {"model": ErrorResponse, "description": "Tenant has an active contract"},
+    },
+)
+def delete_tenant_endpoint(tenant_id: int):
+    if get_tenant(tenant_id) is None:
+        raise HTTPException(status_code=404, detail="Tenant not found.")
+    if tenant_has_any_contract(tenant_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a tenant with contract history.",
+        )
+    delete_tenant(tenant_id)
+    return Response(status_code=204)
 
 
 @app.delete(
@@ -519,4 +729,64 @@ def delete_payment_endpoint(payment_id: int):
     deleted = delete_payment(payment_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Payment not found.")
+    return Response(status_code=204)
+
+
+@app.get(
+    "/contracts/{contract_id}/rent-changes",
+    tags=["rent-adjustments"],
+    summary="List rent change history for a contract",
+    response_model=list[RentChangeItem],
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found"},
+    },
+)
+def list_rent_changes_endpoint(contract_id: int):
+    try:
+        return list_rent_changes(contract_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post(
+    "/contracts/{contract_id}/rent-changes",
+    tags=["rent-adjustments"],
+    summary="Add a rent change to a contract",
+    response_model=RentChangeItem,
+    status_code=201,
+    responses={
+        400: {"model": ErrorResponse, "description": "Chronological violation or invalid date"},
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def create_rent_change_endpoint(contract_id: int, data: RentChangeCreate):
+    try:
+        new_id = insert_rent_change(contract_id, data)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return get_rent_change(new_id)
+
+
+@app.delete(
+    "/rent-changes/{rent_change_id}",
+    tags=["rent-adjustments"],
+    summary="Delete a rent change",
+    status_code=204,
+    responses={
+        400: {"model": ErrorResponse, "description": "Cannot delete sole rent change"},
+        404: {"model": ErrorResponse, "description": "Rent change not found"},
+        409: {"model": ErrorResponse, "description": "Not the most recent rent change"},
+    },
+)
+def delete_rent_change_endpoint(rent_change_id: int):
+    try:
+        delete_rent_change(rent_change_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return Response(status_code=204)

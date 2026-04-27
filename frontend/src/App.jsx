@@ -12,6 +12,7 @@ import ContractsPage from './ContractsPage'
 import TenantsPage from './TenantsPage'
 import AdjustmentsPage from './AdjustmentsPage'
 import PaymentsView from './PaymentsView'
+import RentChangesView from './RentChangesView'
 
 const API_URL = 'http://127.0.0.1:8000/dashboard'
 
@@ -94,6 +95,10 @@ function App() {
     setRoute({ name: 'payments', contract, from: route.name })
   }
 
+  function handleRentChangeSelect(contract) {
+    setRoute({ name: 'rent-changes', contract, from: route.name })
+  }
+
   function handleClearFilters() {
     setStatusFilter('occupied')
     setAdjustmentFilter('all')
@@ -131,8 +136,8 @@ function App() {
     if (route.name === 'properties') {
       return (
         <PropertiesPage
-          properties={properties}
-          onRowClick={handleRowClick}
+          onPropertySelect={handlePropertySelect}
+          onDataMutation={refreshDashboard}
         />
       )
     }
@@ -147,11 +152,22 @@ function App() {
       )
     }
 
+    if (route.name === 'rent-changes') {
+      return (
+        <RentChangesView
+          contract={route.contract}
+          onBack={() => handleNav(route.from || 'adjustments')}
+          onDataMutation={refreshDashboard}
+        />
+      )
+    }
+
     if (route.name === 'contracts') {
       return (
         <ContractsPage
           onPropertySelect={handlePropertySelect}
           onPaymentSelect={handlePaymentSelect}
+          onDataMutation={refreshDashboard}
         />
       )
     }
@@ -161,7 +177,12 @@ function App() {
     }
 
     if (route.name === 'adjustments') {
-      return <AdjustmentsPage onPropertySelect={handlePropertySelect} />
+      return (
+        <AdjustmentsPage
+          onPropertySelect={handlePropertySelect}
+          onRentChangeSelect={handleRentChangeSelect}
+        />
+      )
     }
 
     // Dashboard (default)

@@ -446,7 +446,8 @@ def list_rentals_for_adjustments() -> list[dict]:
                 rc.amount               AS current_rent,
                 c.adjustment_frequency,
                 c.start_date,
-                {_LATEST_ADJUSTMENT}    AS last_adjustment_date
+                {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
+                c.id                    AS contract_id
             FROM properties p
             JOIN contracts c
                 ON c.property_id = p.id AND c.is_active = 1
@@ -472,9 +473,151 @@ def list_rentals_for_adjustments() -> list[dict]:
             "adjustment_frequency": row[7],
             "start_date": row[8],
             "last_adjustment_date": row[9],
+            "contract_id": row[10],
         }
         for row in rows
     ]
+
+
+def list_rent_changes(contract_id: int) -> list[dict]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE id = ?", (contract_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Contract not found.")
+
+        rows = conn.execute(
+            """
+            SELECT id, contract_id, effective_from, amount, adjustment_pct, comment
+            FROM rent_changes
+            WHERE contract_id = ?
+            ORDER BY effective_from DESC, id DESC
+            """,
+            (contract_id,),
+        ).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "contract_id": r[1],
+            "effective_from": r[2],
+            "amount": r[3],
+            "adjustment_pct": r[4],
+            "comment": r[5],
+        }
+        for r in rows
+    ]
+
+
+def get_rent_change(rent_change_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, contract_id, effective_from, amount, adjustment_pct, comment
+            FROM rent_changes WHERE id = ?
+            """,
+            (rent_change_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "contract_id": row[1],
+        "effective_from": row[2],
+        "amount": row[3],
+        "adjustment_pct": row[4],
+        "comment": row[5],
+    }
+
+
+def insert_rent_change(contract_id: int, data) -> int:
+    with get_connection() as conn:
+        contract_row = conn.execute(
+            "SELECT id, start_date, is_active FROM contracts WHERE id = ?",
+            (contract_id,),
+        ).fetchone()
+
+        if contract_row is None or not contract_row[2]:
+            raise LookupError("Active contract not found.")
+
+        start_date_str = contract_row[1]
+
+        if data.effective_from.isoformat() < start_date_str:
+            raise ValueError(
+                "effective_from must be on or after the contract start_date."
+            )
+
+        latest_row = conn.execute(
+            """
+            SELECT effective_from FROM rent_changes
+            WHERE contract_id = ?
+            ORDER BY effective_from DESC, id DESC
+            LIMIT 1
+            """,
+            (contract_id,),
+        ).fetchone()
+
+        if latest_row and data.effective_from.isoformat() <= latest_row[0]:
+            raise ValueError(
+                "effective_from must be strictly after the latest rent change date."
+            )
+
+        cursor = conn.execute(
+            """
+            INSERT INTO rent_changes
+                (contract_id, effective_from, amount, adjustment_pct, comment)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                contract_id,
+                data.effective_from.isoformat(),
+                data.amount,
+                data.adjustment_pct,
+                data.comment,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def delete_rent_change(rent_change_id: int) -> None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, contract_id FROM rent_changes WHERE id = ?",
+            (rent_change_id,),
+        ).fetchone()
+
+        if row is None:
+            raise LookupError("Rent change not found.")
+
+        contract_id = row[1]
+
+        count = conn.execute(
+            "SELECT COUNT(*) FROM rent_changes WHERE contract_id = ?",
+            (contract_id,),
+        ).fetchone()[0]
+
+        if count == 1:
+            raise ValueError("Cannot delete the only rent change of a contract.")
+
+        latest_row = conn.execute(
+            """
+            SELECT id FROM rent_changes
+            WHERE contract_id = ?
+            ORDER BY effective_from DESC, id DESC
+            LIMIT 1
+            """,
+            (contract_id,),
+        ).fetchone()
+
+        if latest_row[0] != rent_change_id:
+            raise RuntimeError("Can only delete the most recent rent change.")
+
+        conn.execute("DELETE FROM rent_changes WHERE id = ?", (rent_change_id,))
+        conn.commit()
 
 
 def list_dashboard_items() -> list[dict]:

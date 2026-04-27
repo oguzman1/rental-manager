@@ -5,7 +5,7 @@ import { formatCLP, daysUntil, formatMonthsAgo, formatMonthsUntil } from './util
 
 const API_URL = 'http://127.0.0.1:8000/rent-adjustments'
 
-function AdjustmentsPage({ onPropertySelect }) {
+function AdjustmentsPage({ onPropertySelect, onRentChangeSelect }) {
   const [items, setItems] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -44,6 +44,7 @@ function AdjustmentsPage({ onPropertySelect }) {
                     <th className="th">Próx. reajuste</th>
                     <th className="th">Últ. reajuste</th>
                     <th className="th">Estado</th>
+                    <th className="th">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -79,6 +80,14 @@ function AdjustmentsPage({ onPropertySelect }) {
                         <NoticeBadge
                           daysUntilNotice={daysUntil(item.adjustment_notice_date)}
                         />
+                      </td>
+                      <td className="td" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="btn-payments"
+                          onClick={() => onRentChangeSelect && onRentChangeSelect(item)}
+                        >
+                          Gestionar reajustes
+                        </button>
                       </td>
                     </tr>
                   ))}

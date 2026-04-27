@@ -16,20 +16,24 @@ from db import (
     create_contract,
     delete_managed_property,
     delete_payment,
+    delete_rent_change,
     delete_tenant,
     get_contract,
     get_contract_for_payment,
     get_managed_property,
     get_payment,
+    get_rent_change,
     get_tenant,
     init_db,
     insert_managed_property,
     insert_payment,
+    insert_rent_change,
     insert_tenant,
     list_contracts,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
+    list_rent_changes,
     list_rentals_for_adjustments,
     list_tenants,
     tenant_has_any_contract,
@@ -57,6 +61,8 @@ from models import (
     PropertyInfo,
     PropertyStatus,
     RentAdjustmentItem,
+    RentChangeCreate,
+    RentChangeItem,
     RentalInfo,
     TenantCreate,
     TenantDetailResponse,
@@ -333,6 +339,7 @@ def get_rent_adjustments(
         results.append(
             {
                 "id": rental["id"],
+                "contract_id": rental["contract_id"],
                 "rol": rental["rol"],
                 "comuna": rental["comuna"],
                 "property_label": rental["property_label"],
@@ -722,4 +729,64 @@ def delete_payment_endpoint(payment_id: int):
     deleted = delete_payment(payment_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Payment not found.")
+    return Response(status_code=204)
+
+
+@app.get(
+    "/contracts/{contract_id}/rent-changes",
+    tags=["rent-adjustments"],
+    summary="List rent change history for a contract",
+    response_model=list[RentChangeItem],
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found"},
+    },
+)
+def list_rent_changes_endpoint(contract_id: int):
+    try:
+        return list_rent_changes(contract_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post(
+    "/contracts/{contract_id}/rent-changes",
+    tags=["rent-adjustments"],
+    summary="Add a rent change to a contract",
+    response_model=RentChangeItem,
+    status_code=201,
+    responses={
+        400: {"model": ErrorResponse, "description": "Chronological violation or invalid date"},
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def create_rent_change_endpoint(contract_id: int, data: RentChangeCreate):
+    try:
+        new_id = insert_rent_change(contract_id, data)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return get_rent_change(new_id)
+
+
+@app.delete(
+    "/rent-changes/{rent_change_id}",
+    tags=["rent-adjustments"],
+    summary="Delete a rent change",
+    status_code=204,
+    responses={
+        400: {"model": ErrorResponse, "description": "Cannot delete sole rent change"},
+        404: {"model": ErrorResponse, "description": "Rent change not found"},
+        409: {"model": ErrorResponse, "description": "Not the most recent rent change"},
+    },
+)
+def delete_rent_change_endpoint(rent_change_id: int):
+    try:
+        delete_rent_change(rent_change_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return Response(status_code=204)

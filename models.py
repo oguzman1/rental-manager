@@ -75,6 +75,7 @@ class ManagedPropertyListItem(BaseModel):
 
 class RentAdjustmentItem(BaseModel):
     id: int
+    contract_id: int
     rol: str
     comuna: str
     property_label: str
@@ -87,6 +88,22 @@ class RentAdjustmentItem(BaseModel):
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     months_until_next_adjustment: int | None = None
+
+
+class RentChangeItem(BaseModel):
+    id: int
+    contract_id: int
+    effective_from: date
+    amount: int
+    adjustment_pct: float | None = None
+    comment: str | None = None
+
+
+class RentChangeCreate(BaseModel):
+    effective_from: date
+    amount: int = Field(gt=0)
+    adjustment_pct: float | None = None
+    comment: str | None = None
 
 
 class DashboardItem(BaseModel):

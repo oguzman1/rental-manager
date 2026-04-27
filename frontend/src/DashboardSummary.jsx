@@ -1,30 +1,30 @@
-function DashboardSummary({ total, occupied, vacant, noticeRequired }) {
+function DashboardSummary({ total, occupied, paid, adjustedThisMonth }) {
   const occupancyPct = total > 0 ? Math.round((occupied / total) * 100) : 0
 
   return (
     <div className="kpi-strip">
       <KpiTile
         label="Arrendadas"
-        value={occupied}
-        sub={`de ${total} propiedades`}
+        value={`${occupied} de ${total}`}
+        sub="propiedades ocupadas"
         tone="ok"
       />
       <KpiTile
-        label="Vacantes"
-        value={vacant}
-        sub="sin contrato activo"
+        label="Pagadas en el período"
+        value={`${paid} de ${occupied}`}
+        sub="pagos confirmados este mes"
+        tone={paid === occupied && occupied > 0 ? 'ok' : 'muted'}
+      />
+      <KpiTile
+        label="Reajustadas este mes"
+        value={`${adjustedThisMonth} de ${occupied}`}
+        sub="reajustes en el mes calendario"
         tone="muted"
       />
       <KpiTile
         label="Ocupación"
         value={`${occupancyPct}%`}
-        sub={`${occupied} arrendadas · ${vacant} vacantes`}
-      />
-      <KpiTile
-        label="Avisos reajuste"
-        value={noticeRequired}
-        sub={noticeRequired > 0 ? 'requieren aviso' : 'sin avisos pendientes'}
-        tone={noticeRequired > 0 ? 'warn' : 'muted'}
+        sub={`${occupied} arrendadas · ${total - occupied} vacantes`}
       />
     </div>
   )

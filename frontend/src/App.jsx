@@ -15,32 +15,27 @@ import PaymentsView from './PaymentsView'
 
 const API_URL = 'http://127.0.0.1:8000/dashboard'
 
-function computeNoticeItems(properties) {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+function computePendingItems(properties) {
+  const todayDay = new Date().getDate()
 
   return properties
-    .filter((p) => p.requires_adjustment_notice && p.adjustment_notice_date)
+    .filter((p) => p.status === 'occupied' && p.current_payment_status !== 'paid')
     .map((p) => {
-      const noticeDate = new Date(p.adjustment_notice_date)
-      noticeDate.setHours(0, 0, 0, 0)
-      const daysUntilNotice = Math.round((noticeDate - today) / 86400000)
-
-      let bucket
-      if (daysUntilNotice < 0)       bucket = 'overdue'
-      else if (daysUntilNotice === 0) bucket = 'today'
-      else if (daysUntilNotice <= 7)  bucket = 'next_7_days'
-      else if (daysUntilNotice <= 30) bucket = 'next_30_days'
-      else                            bucket = 'later'
-
-      return { ...p, daysUntilNotice, bucket }
+      let paymentState
+      if (p.current_payment_status === 'partial') {
+        paymentState = 'partial'
+      } else {
+        // pending or null: check if past the payment day
+        paymentState = p.payment_day != null && todayDay > p.payment_day
+          ? 'overdue'
+          : 'pending'
+      }
+      return { ...p, paymentState }
     })
-    .filter((p) => p.bucket !== 'later')
-    .sort(
-      (a, b) =>
-        new Date(a.adjustment_notice_date) - new Date(b.adjustment_notice_date)
-    )
-    .slice(0, 5)
+    .sort((a, b) => {
+      const order = { overdue: 0, partial: 1, pending: 2 }
+      return order[a.paymentState] - order[b.paymentState]
+    })
 }
 
 function App() {
@@ -184,11 +179,11 @@ function App() {
         )
       })
 
-    const totalCount    = properties.length
-    const occupiedCount = properties.filter((p) => p.status === 'occupied').length
-    const vacantCount   = properties.filter((p) => p.status === 'vacant').length
-    const noticeCount   = properties.filter((p) => p.requires_adjustment_notice).length
-    const noticeItems   = computeNoticeItems(properties)
+    const totalCount        = properties.length
+    const occupiedCount     = properties.filter((p) => p.status === 'occupied').length
+    const paidCount         = properties.filter((p) => p.status === 'occupied' && p.current_payment_status === 'paid').length
+    const adjustedThisMonth = properties.filter((p) => p.months_since_last_adjustment === 0).length
+    const pendingItems      = computePendingItems(properties)
 
     return (
       <>
@@ -196,8 +191,8 @@ function App() {
         <DashboardSummary
           total={totalCount}
           occupied={occupiedCount}
-          vacant={vacantCount}
-          noticeRequired={noticeCount}
+          paid={paidCount}
+          adjustedThisMonth={adjustedThisMonth}
         />
         <div className="dashboard-body">
           <div className="table-section">
@@ -220,7 +215,7 @@ function App() {
             </div>
           </div>
           <NoticesPanel
-            notices={noticeItems}
+            notices={pendingItems}
             onSelect={handleRowClick}
           />
         </div>

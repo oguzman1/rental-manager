@@ -34,6 +34,31 @@ export function StatusBadge({ status }) {
   )
 }
 
+export function PaymentStateBadge({ state }) {
+  if (state === 'overdue') {
+    return (
+      <span className="badge badge-danger">
+        <span className="badge-dot" />
+        Vencido
+      </span>
+    )
+  }
+  if (state === 'partial') {
+    return (
+      <span className="badge badge-warn">
+        <span className="badge-dot" />
+        Parcial
+      </span>
+    )
+  }
+  return (
+    <span className="badge badge-muted">
+      <span className="badge-dot" />
+      Pendiente
+    </span>
+  )
+}
+
 export function NoticeBadge({ daysUntilNotice }) {
   if (daysUntilNotice === null || daysUntilNotice === undefined) return null
 

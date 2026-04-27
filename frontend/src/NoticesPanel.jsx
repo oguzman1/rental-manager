@@ -1,61 +1,40 @@
-import { NoticeBadge } from './Badge'
+import { PaymentStateBadge } from './Badge'
 
-const BUCKET_LABELS = {
-  overdue:      'Atrasados',
-  today:        'Hoy',
-  next_7_days:  'Esta semana',
-  next_30_days: 'Este mes',
+const STATE_CARD_CLASS = {
+  overdue: 'notice-card-overdue',
+  partial: 'notice-card-next_7_days',
+  pending: 'notice-card-next_30_days',
 }
 
-const BUCKET_ORDER = ['overdue', 'today', 'next_7_days', 'next_30_days']
-
 function NoticesPanel({ notices, onSelect }) {
-  if (notices.length === 0) {
-    return (
-      <aside className="notices-panel">
-        <div className="notices-header">
-          <span className="notices-title">Avisos de reajuste</span>
-        </div>
-        <div className="notices-empty">
-          Sin avisos pendientes en los próximos 30 días.
-        </div>
-      </aside>
-    )
-  }
-
-  const grouped = BUCKET_ORDER.reduce((acc, bucket) => {
-    const items = notices.filter((n) => n.bucket === bucket)
-    if (items.length > 0) acc[bucket] = items
-    return acc
-  }, {})
+  const count = notices.length
 
   return (
     <aside className="notices-panel">
       <div className="notices-header">
-        <span className="notices-title">Avisos de reajuste</span>
-        <span className="notices-count">{notices.length}</span>
+        <span className="notices-title">Pendientes del período</span>
+        {count > 0 && <span className="notices-count">{count}</span>}
       </div>
 
-      {Object.entries(grouped).map(([bucket, items]) => (
-        <div key={bucket} className="notices-group">
-          <div className="notices-group-label">{BUCKET_LABELS[bucket]}</div>
-          {items.map((notice) => (
-            <NoticeCard
-              key={notice.id}
-              notice={notice}
-              onClick={() => onSelect(notice)}
-            />
-          ))}
-        </div>
-      ))}
+      {count === 0 ? (
+        <div className="notices-empty">Todos al día en el período.</div>
+      ) : (
+        notices.map((item) => (
+          <PendingCard
+            key={item.id}
+            item={item}
+            onClick={() => onSelect(item)}
+          />
+        ))
+      )}
     </aside>
   )
 }
 
-function NoticeCard({ notice, onClick }) {
+function PendingCard({ item, onClick }) {
   return (
     <div
-      className={`notice-card notice-card-${notice.bucket}`}
+      className={`notice-card ${STATE_CARD_CLASS[item.paymentState]}`}
       onClick={onClick}
       role="button"
       tabIndex={0}
@@ -63,14 +42,18 @@ function NoticeCard({ notice, onClick }) {
     >
       <div className="notice-card-top">
         <span className="notice-card-name">
-          {notice.property_label ?? notice.rol}
+          {item.property_label ?? item.rol}
         </span>
-        <NoticeBadge daysUntilNotice={notice.daysUntilNotice} />
+        <PaymentStateBadge state={item.paymentState} />
       </div>
-      {notice.tenant_name && (
-        <div className="notice-card-tenant">{notice.tenant_name}</div>
+      {item.tenant_name && (
+        <div className="notice-card-tenant">{item.tenant_name}</div>
       )}
-      <div className="notice-card-date">{notice.adjustment_notice_date}</div>
+      {item.current_rent != null && (
+        <div className="notice-card-date">
+          {item.current_rent.toLocaleString('es-CL')} CLP
+        </div>
+      )}
     </div>
   )
 }

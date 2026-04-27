@@ -50,7 +50,7 @@ function App() {
 
   const [route, setRoute] = useState({ name: 'dashboard' })
 
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('occupied')
   const [adjustmentFilter, setAdjustmentFilter] = useState('all')
   const [searchText, setSearchText] = useState('')
 
@@ -100,7 +100,7 @@ function App() {
   }
 
   function handleClearFilters() {
-    setStatusFilter('all')
+    setStatusFilter('occupied')
     setAdjustmentFilter('all')
     setSearchText('')
   }

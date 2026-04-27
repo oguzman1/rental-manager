@@ -708,3 +708,129 @@ def test_dashboard_current_payment_status_paid():
     item = next(i for i in items if i["rol"] == "09006-00001")
 
     assert item["current_payment_status"] == "paid"
+
+
+# --- GET /managed-property/{id} ---
+
+def test_get_managed_property_by_id_returns_occupied_with_rental():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "ANTOFAGASTA",
+                "rol": "10001-00001",
+                "address": "Matta 100",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "10",
+                "property_number": "10",
+                "year": 2020,
+                "fiscal_appraisal": 80000000,
+            },
+            "rental": {
+                "tenant_name": "Inquilino Detail",
+                "payment_day": 7,
+                "property_label": "depto antofagasta",
+                "current_rent": 450000,
+                "adjustment_frequency": "annual",
+                "start_date": "2023-06-01",
+                "notice_days": 30,
+                "adjustment_month": "june",
+            },
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10001-00001")
+
+    r = client.get(f"/managed-property/{pid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["id"] == pid
+    assert data["property"]["rol"] == "10001-00001"
+    assert data["property"]["status"] == "occupied"
+    assert data["rental"]["tenant_name"] == "Inquilino Detail"
+    assert data["rental"]["payment_day"] == 7
+    assert data["rental"]["current_rent"] == 450000
+    assert data["rental"]["adjustment_month"] == "june"
+
+
+def test_get_managed_property_by_id_returns_vacant_with_null_rental():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "ARICA",
+                "rol": "10002-00001",
+                "address": "Lynch 200",
+                "destination": "SITIO ERIAZO",
+                "status": "vacant",
+                "fojas": None,
+                "property_number": None,
+                "year": None,
+                "fiscal_appraisal": None,
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10002-00001")
+
+    r = client.get(f"/managed-property/{pid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["property"]["status"] == "vacant"
+    assert data["rental"] is None
+
+
+def test_get_managed_property_by_id_not_found():
+    r = client.get("/managed-property/99999")
+    assert r.status_code == 404
+
+
+# --- DELETE cascade includes payments ---
+
+def test_delete_managed_property_also_removes_payments():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "RANCAGUA",
+                "rol": "10003-00001",
+                "address": "O'Higgins 300",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "20",
+                "property_number": "20",
+                "year": 2018,
+                "fiscal_appraisal": 70000000,
+            },
+            "rental": {
+                "tenant_name": "Inquilino Cascade",
+                "payment_day": 5,
+                "property_label": "depto rancagua",
+                "current_rent": 380000,
+                "adjustment_frequency": "annual",
+                "start_date": "2022-01-01",
+                "notice_days": 30,
+                "adjustment_month": "january",
+            },
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10003-00001")
+    contracts = client.get("/contracts").json()
+    cid = next(c["id"] for c in contracts if c["rol"] == "10003-00001")
+
+    client.post(f"/contracts/{cid}/payments", json={"period": "2024-01"})
+    client.post(f"/contracts/{cid}/payments", json={"period": "2024-02"})
+
+    r = client.delete(f"/managed-property/{pid}")
+    assert r.status_code == 200
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect("test_rental_manager.db")
+    payments = conn.execute(
+        "SELECT id FROM payments WHERE contract_id = ?", (cid,)
+    ).fetchall()
+    conn.close()
+    assert payments == [], "Los pagos deben eliminarse al borrar la propiedad"

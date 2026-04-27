@@ -300,6 +300,7 @@ def delete_managed_property(property_id: int) -> bool:
         contract_ids = [row[0] for row in contract_rows]
 
         for cid in contract_ids:
+            conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM rent_changes WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM contract_tenants WHERE contract_id = ?", (cid,))
 
@@ -307,6 +308,68 @@ def delete_managed_property(property_id: int) -> bool:
         cursor = conn.execute("DELETE FROM properties WHERE id = ?", (property_id,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def get_managed_property(property_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                p.id,
+                p.rol,
+                p.comuna,
+                p.address,
+                p.destination,
+                p.status,
+                p.fojas,
+                p.property_number,
+                p.year,
+                p.fiscal_appraisal,
+                p.display_name        AS property_label,
+                t.display_name        AS tenant_name,
+                c.payment_day,
+                c.notice_days,
+                c.adjustment_frequency,
+                c.adjustment_month,
+                c.start_date,
+                rc.amount             AS current_rent
+            FROM properties p
+            LEFT JOIN contracts c
+                   ON c.property_id = p.id AND c.is_active = 1
+            LEFT JOIN contract_tenants ct
+                   ON ct.contract_id = c.id AND ct.is_primary = 1
+            LEFT JOIN tenants t
+                   ON t.id = ct.tenant_id
+            LEFT JOIN rent_changes rc
+                   ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE p.id = ?
+            """,
+            (property_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "rol": row[1],
+        "comuna": row[2],
+        "address": row[3],
+        "destination": row[4],
+        "status": row[5],
+        "fojas": row[6],
+        "property_number": row[7],
+        "year": row[8],
+        "fiscal_appraisal": row[9],
+        "property_label": row[10],
+        "tenant_name": row[11],
+        "payment_day": row[12],
+        "notice_days": row[13],
+        "adjustment_frequency": row[14],
+        "adjustment_month": row[15],
+        "start_date": row[16],
+        "current_rent": row[17],
+    }
 
 
 _LATEST_RENT = """

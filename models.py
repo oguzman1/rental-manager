@@ -135,6 +135,12 @@ class TenantListItem(BaseModel):
     tenancy_years: int | None = None
 
 
+class PropertyDetailResponse(BaseModel):
+    id: int
+    property: PropertyInfo
+    rental: RentalInfo | None
+
+
 class PaymentSource(str, Enum):
     manual = "manual"
 

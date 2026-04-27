@@ -15,6 +15,7 @@ from db import (
     delete_managed_property,
     delete_payment,
     get_contract_for_payment,
+    get_managed_property,
     get_payment,
     init_db,
     insert_managed_property,
@@ -39,8 +40,11 @@ from models import (
     PaymentCreate,
     PaymentResponse,
     PaymentUpdate,
+    PropertyDetailResponse,
+    PropertyInfo,
     PropertyStatus,
     RentAdjustmentItem,
+    RentalInfo,
     TenantListItem,
 )
 
@@ -79,6 +83,52 @@ def health():
 )
 def get_managed_properties():
     return list_managed_properties()
+
+
+@app.get(
+    "/managed-property/{property_id}",
+    tags=["managed-properties"],
+    summary="Get a managed property by ID",
+    response_model=PropertyDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Managed property not found"},
+    },
+)
+def get_managed_property_endpoint(property_id: int):
+    data = get_managed_property(property_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Managed property not found.")
+
+    property_info = PropertyInfo(
+        rol=data["rol"],
+        comuna=data["comuna"],
+        address=data["address"],
+        destination=data["destination"],
+        status=data["status"],
+        fojas=data["fojas"],
+        property_number=data["property_number"],
+        year=data["year"],
+        fiscal_appraisal=data["fiscal_appraisal"],
+    )
+
+    rental_info = None
+    if data["payment_day"] is not None:
+        rental_info = RentalInfo(
+            tenant_name=data["tenant_name"],
+            payment_day=data["payment_day"],
+            property_label=data["property_label"],
+            current_rent=data["current_rent"],
+            adjustment_frequency=data["adjustment_frequency"],
+            start_date=data["start_date"],
+            notice_days=data["notice_days"],
+            adjustment_month=data["adjustment_month"],
+        )
+
+    return PropertyDetailResponse(
+        id=data["id"],
+        property=property_info,
+        rental=rental_info,
+    )
 
 
 @app.get(

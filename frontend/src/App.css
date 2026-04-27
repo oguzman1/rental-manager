@@ -912,3 +912,23 @@
 }
 
 .btn-link-secondary:hover { color: var(--ink); }
+
+/* ============================================================
+   Form helpers (used by CRUD forms in inner pages)
+   ============================================================ */
+.form-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 32px;
+}
+
+.form-section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}

@@ -131,8 +131,8 @@ function App() {
     if (route.name === 'properties') {
       return (
         <PropertiesPage
-          properties={properties}
-          onRowClick={handleRowClick}
+          onPropertySelect={handlePropertySelect}
+          onDataMutation={refreshDashboard}
         />
       )
     }

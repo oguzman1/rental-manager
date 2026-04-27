@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from datetime import date
 
 from models import ManagedPropertyCreate
 
@@ -545,7 +546,10 @@ def list_contracts() -> list[dict]:
                 c.start_date,
                 rc.amount       AS current_rent,
                 c.payment_day,
-                c.adjustment_frequency
+                c.adjustment_frequency,
+                c.notice_days,
+                c.adjustment_month,
+                c.comment
             FROM contracts c
             JOIN properties p
                 ON p.id = c.property_id
@@ -571,9 +575,173 @@ def list_contracts() -> list[dict]:
             "current_rent": row[6],
             "payment_day": row[7],
             "adjustment_frequency": row[8],
+            "notice_days": row[9],
+            "adjustment_month": row[10],
+            "comment": row[11],
         }
         for row in rows
     ]
+
+
+def get_contract(contract_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            f"""
+            SELECT
+                c.id,
+                c.property_id,
+                p.display_name  AS property_label,
+                p.rol,
+                t.display_name  AS tenant_name,
+                c.start_date,
+                c.end_date,
+                rc.amount       AS current_rent,
+                c.payment_day,
+                c.adjustment_frequency,
+                c.notice_days,
+                c.adjustment_month,
+                c.comment,
+                c.is_active
+            FROM contracts c
+            JOIN properties p ON p.id = c.property_id
+            JOIN contract_tenants ct ON ct.contract_id = c.id AND ct.is_primary = 1
+            JOIN tenants t ON t.id = ct.tenant_id
+            JOIN rent_changes rc ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.id = ?
+            """,
+            (contract_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "property_id": row[1],
+        "property_label": row[2],
+        "rol": row[3],
+        "tenant_name": row[4],
+        "start_date": row[5],
+        "end_date": row[6],
+        "current_rent": row[7],
+        "payment_day": row[8],
+        "adjustment_frequency": row[9],
+        "notice_days": row[10],
+        "adjustment_month": row[11],
+        "comment": row[12],
+        "is_active": bool(row[13]),
+    }
+
+
+def create_contract(data) -> int:
+    with get_connection() as conn:
+        prop = conn.execute(
+            "SELECT id FROM properties WHERE id = ?", (data.property_id,)
+        ).fetchone()
+        if prop is None:
+            raise LookupError("Property not found.")
+
+        tenant = conn.execute(
+            "SELECT id FROM tenants WHERE id = ?", (data.tenant_id,)
+        ).fetchone()
+        if tenant is None:
+            raise LookupError("Tenant not found.")
+
+        existing = conn.execute(
+            "SELECT id FROM contracts WHERE property_id = ? AND is_active = 1",
+            (data.property_id,),
+        ).fetchone()
+        if existing:
+            raise ValueError("Property already has an active contract.")
+
+        cursor = conn.execute(
+            """
+            INSERT INTO contracts
+                (property_id, start_date, payment_day, notice_days,
+                 adjustment_frequency, adjustment_month, comment, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                data.property_id,
+                data.start_date.isoformat(),
+                data.payment_day,
+                data.notice_days,
+                data.adjustment_frequency.value,
+                data.adjustment_month,
+                data.comment,
+            ),
+        )
+        contract_id = cursor.lastrowid
+
+        conn.execute(
+            "INSERT INTO contract_tenants (contract_id, tenant_id, is_primary) VALUES (?, ?, 1)",
+            (contract_id, data.tenant_id),
+        )
+        conn.execute(
+            "INSERT INTO rent_changes (contract_id, effective_from, amount) VALUES (?, ?, ?)",
+            (contract_id, data.start_date.isoformat(), data.current_rent),
+        )
+        conn.execute(
+            "UPDATE properties SET status = 'occupied' WHERE id = ?",
+            (data.property_id,),
+        )
+        conn.commit()
+        return contract_id
+
+
+def update_contract(contract_id: int, data) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE id = ? AND is_active = 1",
+            (contract_id,),
+        ).fetchone()
+        if row is None:
+            return False
+
+        updates: dict = {}
+        if data.payment_day is not None:
+            updates["payment_day"] = data.payment_day
+        if data.notice_days is not None:
+            updates["notice_days"] = data.notice_days
+        if data.adjustment_frequency is not None:
+            updates["adjustment_frequency"] = data.adjustment_frequency.value
+        if "adjustment_month" in data.model_fields_set:
+            updates["adjustment_month"] = data.adjustment_month
+        if "comment" in data.model_fields_set:
+            updates["comment"] = data.comment
+
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE contracts SET {set_clause} WHERE id = ?",
+                [*updates.values(), contract_id],
+            )
+
+        if data.current_rent is not None:
+            conn.execute(
+                "INSERT INTO rent_changes (contract_id, effective_from, amount) VALUES (?, ?, ?)",
+                (contract_id, date.today().isoformat(), data.current_rent),
+            )
+
+        conn.commit()
+        return True
+
+
+def close_contract(contract_id: int, end_date: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE contracts SET is_active = 0, end_date = ? WHERE id = ?",
+            (end_date, contract_id),
+        )
+        row = conn.execute(
+            "SELECT property_id FROM contracts WHERE id = ?", (contract_id,)
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE properties SET status = 'vacant' WHERE id = ?",
+                (row[0],),
+            )
+        conn.commit()
 
 
 def list_tenants() -> list[dict]:
@@ -670,15 +838,10 @@ def update_tenant(tenant_id: int, data) -> bool:
     return cursor.rowcount > 0
 
 
-def tenant_has_active_contract(tenant_id: int) -> bool:
+def tenant_has_any_contract(tenant_id: int) -> bool:
     with get_connection() as conn:
         row = conn.execute(
-            """
-            SELECT 1 FROM contract_tenants ct
-            JOIN contracts c ON c.id = ct.contract_id AND c.is_active = 1
-            WHERE ct.tenant_id = ?
-            LIMIT 1
-            """,
+            "SELECT 1 FROM contract_tenants WHERE tenant_id = ? LIMIT 1",
             (tenant_id,),
         ).fetchone()
     return row is not None

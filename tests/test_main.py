@@ -906,17 +906,207 @@ def test_delete_standalone_tenant_returns_204():
 
 
 def test_delete_tenant_with_active_contract_returns_409():
-    props = client.get("/managed-properties").json()
-    tenant_with_contract = next(
-        p for p in props if p["has_rental"] and p["rol"] == "02162-00036"
-    )
     tenants = client.get("/tenants").json()
     tenant = next(t for t in tenants if t["rol"] == "02162-00036")
     r = client.delete(f"/tenants/{tenant['id']}")
     assert r.status_code == 409
-    assert "active contract" in r.json()["detail"]
+    assert "contract" in r.json()["detail"]
 
 
 def test_delete_tenant_not_found_returns_404():
     r = client.delete("/tenants/99999")
     assert r.status_code == 404
+
+
+# --- FASE 3: Contratos CRUD ---
+
+_f3_seq = 0
+
+
+def _setup_contract_scenario() -> tuple[int, int, int]:
+    """Returns (property_id, tenant_id, contract_id). Each call uses a unique ROL."""
+    global _f3_seq
+    _f3_seq += 1
+    rol = f"08001-{_f3_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "CONCEPCIÓN",
+                "rol": rol,
+                "address": f"Freire {_f3_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+                "fojas": "801",
+                "property_number": "801",
+                "year": 2018,
+                "fiscal_appraisal": 90000000,
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": f"Arrendatario Fase3-{_f3_seq}"})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "adjustment_month": "january",
+            "current_rent": 700000,
+            "comment": "contrato test fase3",
+        },
+    )
+    assert r.status_code == 200, f"create_contract failed: {r.json()}"
+    return prop["id"], tenant_id, r.json()["id"]
+
+
+def test_create_contract_returns_detail():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == contract_id
+    assert body["current_rent"] == 700000
+    assert body["payment_day"] == 5
+    assert body["adjustment_frequency"] == "annual"
+    assert body["notice_days"] == 30
+    assert body["adjustment_month"] == "january"
+    assert body["comment"] == "contrato test fase3"
+    assert body["is_active"] is True
+    assert body["end_date"] is None
+
+
+def test_create_contract_marks_property_as_occupied():
+    prop_id, _, _ = _setup_contract_scenario()
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["id"] == prop_id)
+    assert prop["status"] == "occupied"
+
+
+def test_create_contract_duplicate_active_returns_409():
+    prop_id, tenant_id, _ = _setup_contract_scenario()
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop_id,
+            "tenant_id": tenant_id,
+            "start_date": "2024-06-01",
+            "payment_day": 10,
+            "notice_days": 60,
+            "adjustment_frequency": "semiannual",
+            "current_rent": 800000,
+        },
+    )
+    assert r.status_code == 409, f"Expected 409, got {r.status_code}: {r.json()}"
+
+
+def test_create_contract_property_not_found_returns_404():
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": 99999,
+            "tenant_id": 1,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 0,
+            "adjustment_frequency": "annual",
+            "current_rent": 500000,
+        },
+    )
+    assert r.status_code == 404
+
+
+def test_get_contract_not_found_returns_404():
+    r = client.get("/contracts/99999")
+    assert r.status_code == 404
+
+
+def test_update_contract_payment_day():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(f"/contracts/{contract_id}", json={"payment_day": 15})
+    assert r.status_code == 200
+    assert r.json()["payment_day"] == 15
+
+
+def test_update_contract_rent_inserts_new_rent_change():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(f"/contracts/{contract_id}", json={"current_rent": 750000})
+    assert r.status_code == 200
+    assert r.json()["current_rent"] == 750000
+
+
+def test_update_contract_not_found_returns_404():
+    r = client.patch("/contracts/99999", json={"payment_day": 10})
+    assert r.status_code == 404
+
+
+def test_close_contract_sets_inactive_and_property_vacant():
+    prop_id, _, contract_id = _setup_contract_scenario()
+    r = client.patch(
+        f"/contracts/{contract_id}/close",
+        json={"end_date": "2024-12-31"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_active"] is False
+    assert body["end_date"] == "2024-12-31"
+
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["id"] == prop_id)
+    assert prop["status"] == "vacant"
+
+
+def test_close_contract_excluded_from_list():
+    _, _, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    contracts = client.get("/contracts").json()
+    assert not any(c["id"] == contract_id for c in contracts)
+
+
+def test_close_contract_end_date_before_start_returns_400():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.patch(
+        f"/contracts/{contract_id}/close",
+        json={"end_date": "2023-01-01"},
+    )
+    assert r.status_code == 400
+
+
+def test_close_contract_not_found_returns_404():
+    r = client.patch("/contracts/99999/close", json={"end_date": "2024-12-31"})
+    assert r.status_code == 404
+
+
+def test_close_already_closed_contract_returns_404():
+    _, _, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    assert r.status_code == 404
+
+
+def test_delete_tenant_with_historical_contract_returns_409():
+    _, tenant_id, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 409
+    assert "contract" in r.json()["detail"]
+
+
+def test_list_contracts_includes_notice_days_and_comment():
+    _, _, contract_id = _setup_contract_scenario()
+    contracts = client.get("/contracts").json()
+    contract = next((c for c in contracts if c["id"] == contract_id), None)
+    assert contract is not None
+    assert "notice_days" in contract
+    assert "adjustment_month" in contract
+    assert "comment" in contract

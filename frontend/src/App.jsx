@@ -152,6 +152,7 @@ function App() {
         <ContractsPage
           onPropertySelect={handlePropertySelect}
           onPaymentSelect={handlePaymentSelect}
+          onDataMutation={refreshDashboard}
         />
       )
     }

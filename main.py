@@ -12,9 +12,12 @@ from adjustments import (
     months_between,
 )
 from db import (
+    close_contract,
+    create_contract,
     delete_managed_property,
     delete_payment,
     delete_tenant,
+    get_contract,
     get_contract_for_payment,
     get_managed_property,
     get_payment,
@@ -29,14 +32,19 @@ from db import (
     list_payments_for_contract,
     list_rentals_for_adjustments,
     list_tenants,
-    tenant_has_active_contract,
+    tenant_has_any_contract,
+    update_contract,
     update_managed_property,
     update_payment,
     update_tenant,
 )
 from models import (
     AdjustmentFrequency,
+    ContractCloseRequest,
+    ContractCreate,
+    ContractDetailResponse,
     ContractListItem,
+    ContractUpdate,
     DashboardItem,
     ErrorResponse,
     ManagedPropertyCreate,
@@ -422,6 +430,80 @@ def get_contracts():
 
 
 @app.get(
+    "/contracts/{contract_id}",
+    tags=["contracts"],
+    summary="Get a contract by ID",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found"},
+    },
+)
+def get_contract_endpoint(contract_id: int):
+    contract = get_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Contract not found.")
+    return contract
+
+
+@app.post(
+    "/contracts",
+    tags=["contracts"],
+    summary="Create a new contract",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Property or tenant not found"},
+        409: {"model": ErrorResponse, "description": "Property already has an active contract"},
+    },
+)
+def create_contract_endpoint(data: ContractCreate):
+    try:
+        contract_id = create_contract(data)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return get_contract(contract_id)
+
+
+@app.patch(
+    "/contracts/{contract_id}",
+    tags=["contracts"],
+    summary="Update an active contract",
+    response_model=ContractDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def update_contract_endpoint(contract_id: int, data: ContractUpdate):
+    if not update_contract(contract_id, data):
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    return get_contract(contract_id)
+
+
+@app.patch(
+    "/contracts/{contract_id}/close",
+    tags=["contracts"],
+    summary="Close a contract",
+    response_model=ContractDetailResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "end_date before start_date"},
+        404: {"model": ErrorResponse, "description": "Contract not found or already inactive"},
+    },
+)
+def close_contract_endpoint(contract_id: int, data: ContractCloseRequest):
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    if data.end_date < date.fromisoformat(contract["start_date"]):
+        raise HTTPException(
+            status_code=400,
+            detail="end_date must be on or after the contract start_date.",
+        )
+    close_contract(contract_id, str(data.end_date))
+    return get_contract(contract_id)
+
+
+@app.get(
     "/tenants",
     tags=["tenants"],
     summary="List active tenants",
@@ -511,10 +593,10 @@ def update_tenant_endpoint(tenant_id: int, data: TenantCreate):
 def delete_tenant_endpoint(tenant_id: int):
     if get_tenant(tenant_id) is None:
         raise HTTPException(status_code=404, detail="Tenant not found.")
-    if tenant_has_active_contract(tenant_id):
+    if tenant_has_any_contract(tenant_id):
         raise HTTPException(
             status_code=409,
-            detail="Cannot delete a tenant with an active contract.",
+            detail="Cannot delete a tenant with contract history.",
         )
     delete_tenant(tenant_id)
     return Response(status_code=204)

@@ -118,6 +118,51 @@ class ContractListItem(BaseModel):
     current_rent: int
     payment_day: int
     adjustment_frequency: AdjustmentFrequency
+    notice_days: int
+    adjustment_month: str | None = None
+    comment: str | None = None
+
+
+class ContractCreate(BaseModel):
+    property_id: int
+    tenant_id: int
+    start_date: date
+    payment_day: int = Field(ge=1, le=31)
+    notice_days: int = Field(ge=0)
+    adjustment_frequency: AdjustmentFrequency
+    adjustment_month: str | None = None
+    current_rent: int = Field(gt=0)
+    comment: str | None = None
+
+
+class ContractUpdate(BaseModel):
+    payment_day: int | None = Field(default=None, ge=1, le=31)
+    notice_days: int | None = Field(default=None, ge=0)
+    adjustment_frequency: AdjustmentFrequency | None = None
+    adjustment_month: str | None = None
+    current_rent: int | None = Field(default=None, gt=0)
+    comment: str | None = None
+
+
+class ContractCloseRequest(BaseModel):
+    end_date: date
+
+
+class ContractDetailResponse(BaseModel):
+    id: int
+    property_id: int
+    property_label: str
+    rol: str
+    tenant_name: str
+    start_date: date
+    end_date: date | None
+    current_rent: int
+    payment_day: int
+    adjustment_frequency: AdjustmentFrequency
+    notice_days: int
+    adjustment_month: str | None
+    comment: str | None
+    is_active: bool
 
 
 class TenantListItem(BaseModel):

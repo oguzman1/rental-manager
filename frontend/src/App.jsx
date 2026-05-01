@@ -95,6 +95,21 @@ function App() {
     setRoute({ name: 'payments', contract, from: route.name })
   }
 
+  function handleNoticePaymentClick(property) {
+    setRoute({
+      name: 'payments',
+      contract: {
+        id:             property.contract_id,
+        property_label: property.property_label,
+        tenant_name:    property.tenant_name,
+        current_rent:   property.current_rent,
+        payment_day:    property.payment_day,
+      },
+      targetPeriod: property.latest_period ?? null,
+      from: 'dashboard',
+    })
+  }
+
   function handleRentChangeSelect(contract) {
     setRoute({ name: 'rent-changes', contract, from: route.name })
   }
@@ -148,6 +163,7 @@ function App() {
           contract={route.contract}
           onBack={() => handleNav(route.from || 'contracts')}
           onPaymentMutation={refreshDashboard}
+          targetPeriod={route.targetPeriod}
         />
       )
     }
@@ -237,7 +253,7 @@ function App() {
           </div>
           <NoticesPanel
             notices={pendingItems}
-            onSelect={handleRowClick}
+            onSelect={handleNoticePaymentClick}
           />
         </div>
       </>

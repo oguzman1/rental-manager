@@ -710,6 +710,139 @@ def test_dashboard_current_payment_status_paid():
     assert item["current_payment_status"] == "paid"
 
 
+def test_dashboard_payment_status_missing_period():
+    """Sin períodos creados → payment_status = missing_period, period_amount = None."""
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09007-00001",
+            "address": "TEST VALDIVIA 4",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "904",
+            "property_number": "904",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Missing Period",
+            "payment_day": 10,
+            "property_label": "depto missing period",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09007-00001")
+
+    assert item["payment_status"] == "missing_period"
+    assert item["period_amount"] is None
+    assert item["latest_period"] is None
+
+
+def test_dashboard_payment_status_outstanding_balance():
+    """Período exigible sin pagar → outstanding_balance; period_amount = expected_amount del período."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09008-00001",
+            "address": "TEST VALDIVIA 5",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "905",
+            "property_number": "905",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Outstanding",
+            "payment_day": 10,
+            "property_label": "depto outstanding",
+            "current_rent": 600000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    contracts = client.get("/contracts").json()
+    contract = next(c for c in contracts if c["rol"] == "09008-00001")
+    payment_response = client.post(
+        f"/contracts/{contract['id']}/payments",
+        json={"period": current_period},
+    )
+    assert payment_response.status_code == 200
+    expected_amount = payment_response.json()["expected_amount"]
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09008-00001")
+
+    assert item["payment_status"] == "outstanding_balance"
+    assert item["period_amount"] == expected_amount
+    assert item["latest_period"] == current_period
+
+
+def test_dashboard_payment_status_paid_up():
+    """Período exigible completamente pagado → paid_up."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    payload = {
+        "property": {
+            "comuna": "VALDIVIA",
+            "rol": "09009-00001",
+            "address": "TEST VALDIVIA 6",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "906",
+            "property_number": "906",
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Test Paid Up",
+            "payment_day": 10,
+            "property_label": "depto paid up",
+            "current_rent": 700000,
+            "adjustment_frequency": "annual",
+            "start_date": "2023-01-01",
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    }
+    create_response = client.post("/managed-property", json=payload)
+    assert create_response.status_code == 200
+
+    contracts = client.get("/contracts").json()
+    contract = next(c for c in contracts if c["rol"] == "09009-00001")
+    create_resp = client.post(
+        f"/contracts/{contract['id']}/payments",
+        json={"period": current_period},
+    )
+    assert create_resp.status_code == 200
+    payment_id    = create_resp.json()["id"]
+    expected      = create_resp.json()["expected_amount"]
+
+    patch_resp = client.patch(f"/payments/{payment_id}", json={"paid_amount": expected})
+    assert patch_resp.status_code == 200
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "09009-00001")
+
+    assert item["payment_status"] == "paid_up"
+    assert item["period_amount"] == expected
+    assert item["latest_period"] == current_period
+    assert item["contract_id"] is not None
+
+
 # --- GET /managed-property/{id} ---
 
 def test_get_managed_property_by_id_returns_occupied_with_rental():

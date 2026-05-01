@@ -622,6 +622,7 @@ def delete_rent_change(rent_change_id: int) -> None:
 
 def list_dashboard_items() -> list[dict]:
     with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"""
             SELECT
@@ -636,7 +637,12 @@ def list_dashboard_items() -> list[dict]:
                 c.adjustment_frequency,
                 c.start_date,
                 {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
-                cp.status               AS current_payment_status
+                cp.status               AS current_payment_status,
+                ps.total_exigibles,
+                ps.saldo_pendiente,
+                pp.period_amount,
+                pp.latest_period,
+                c.id                    AS contract_id
             FROM properties p
             LEFT JOIN contracts c
                    ON c.property_id = p.id AND c.is_active = 1
@@ -652,28 +658,64 @@ def list_dashboard_items() -> list[dict]:
                 WHERE    period = strftime('%Y-%m', 'now')
                 GROUP BY contract_id
             ) cp ON c.id = cp.contract_id
+            LEFT JOIN (
+                SELECT
+                    contract_id,
+                    COUNT(*)                                         AS total_exigibles,
+                    SUM(expected_amount - COALESCE(paid_amount, 0)) AS saldo_pendiente
+                FROM payments
+                WHERE period <= strftime('%Y-%m', 'now')
+                GROUP BY contract_id
+            ) ps ON c.id = ps.contract_id
+            LEFT JOIN (
+                SELECT p1.contract_id,
+                       p1.expected_amount AS period_amount,
+                       p1.period          AS latest_period
+                FROM   payments p1
+                INNER JOIN (
+                    SELECT contract_id, MAX(period) AS max_period
+                    FROM   payments
+                    WHERE  period <= strftime('%Y-%m', 'now')
+                    GROUP BY contract_id
+                ) p2 ON p1.contract_id = p2.contract_id
+                     AND p1.period      = p2.max_period
+            ) pp ON c.id = pp.contract_id
             WHERE p.parent_property_id IS NULL
             ORDER BY p.id DESC
             """
         ).fetchall()
 
-    return [
-        {
-            "id": row[0],
-            "rol": row[1],
-            "comuna": row[2],
-            "status": row[3],
-            "property_label": row[4],
-            "tenant_name": row[5],
-            "payment_day": row[6],
-            "current_rent": row[7],
-            "adjustment_frequency": row[8],
-            "start_date": row[9],
-            "last_adjustment_date": row[10],
-            "current_payment_status": row[11],
-        }
-        for row in rows
-    ]
+    result = []
+    for row in rows:
+        total_exigibles = row["total_exigibles"]
+        saldo_pendiente  = row["saldo_pendiente"]
+
+        if total_exigibles is None:
+            payment_status = "missing_period"
+        elif saldo_pendiente <= 0:
+            payment_status = "paid_up"
+        else:
+            payment_status = "outstanding_balance"
+
+        result.append({
+            "id":                     row["id"],
+            "rol":                    row["rol"],
+            "comuna":                 row["comuna"],
+            "status":                 row["status"],
+            "property_label":         row["property_label"],
+            "tenant_name":            row["tenant_name"],
+            "payment_day":            row["payment_day"],
+            "current_rent":           row["current_rent"],
+            "adjustment_frequency":   row["adjustment_frequency"],
+            "start_date":             row["start_date"],
+            "last_adjustment_date":   row["last_adjustment_date"],
+            "current_payment_status": row["current_payment_status"],
+            "payment_status":         payment_status,
+            "period_amount":          row["period_amount"],
+            "latest_period":          row["latest_period"],
+            "contract_id":            row["contract_id"],
+        })
+    return result
 
 
 def list_contracts() -> list[dict]:

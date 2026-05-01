@@ -66,7 +66,28 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   }
 
   useEffect(() => {
-    loadPayments()
+    let cancelled = false
+
+    async function fetchData() {
+      try {
+        const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`)
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+        const data = await res.json()
+        if (!cancelled) {
+          setPayments(data)
+          setError(null)
+          setIsLoading(false)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+          setIsLoading(false)
+        }
+      }
+    }
+
+    fetchData()
+    return () => { cancelled = true }
   }, [contract.id])
 
   const thisPeriod = targetPeriod ?? currentPeriod()

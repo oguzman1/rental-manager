@@ -21,6 +21,12 @@ class PaymentStatus(str, Enum):
     paid = "paid"
 
 
+class DashboardPaymentStatus(str, Enum):
+    paid_up             = "paid_up"
+    outstanding_balance = "outstanding_balance"
+    missing_period      = "missing_period"
+
+
 class PropertyInfo(BaseModel):
     comuna: str
     rol: str
@@ -123,6 +129,10 @@ class DashboardItem(BaseModel):
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     current_payment_status: PaymentStatus | None = None
+    payment_status: DashboardPaymentStatus | None = None
+    period_amount: int | None = None
+    latest_period: str | None = None
+    contract_id: int | None = None
 
 
 class ContractListItem(BaseModel):

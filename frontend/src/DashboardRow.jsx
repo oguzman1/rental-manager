@@ -1,5 +1,5 @@
 import { StatusBadge, PaymentBadge } from './Badge'
-import { formatCLP, contractDuration } from './utils'
+import { formatCLP, formatPeriod, contractDuration } from './utils'
 
 function DashboardRow({ property, onClick }) {
   return (
@@ -16,6 +16,13 @@ function DashboardRow({ property, onClick }) {
       </td>
       <td className="td">
         <StatusBadge status={property.status} />
+        {property.period_amount != null && (
+          <div className="td-sub">{`Canon: ${formatCLP(property.period_amount)}`}</div>
+        )}
+      </td>
+      <td className="td">
+        <PaymentBadge status={property.payment_status} />
+        <div className="td-sub">{formatPeriod(property.latest_period)}</div>
       </td>
       <td className="td td-mono td-muted">
         <div>{property.next_adjustment_date ?? <span className="text-muted">—</span>}</div>
@@ -24,15 +31,6 @@ function DashboardRow({ property, onClick }) {
             {property.last_adjustment_date ? `Últ: ${property.last_adjustment_date}` : 'Sin reajuste'}
           </div>
         )}
-      </td>
-      <td className="td">
-        <PaymentBadge status={property.current_payment_status} />
-      </td>
-      <td className="td td-right td-mono">
-        <div>{formatCLP(property.current_rent)}</div>
-        <div className="td-sub">
-          {property.payment_day != null ? `día ${property.payment_day}` : '—'}
-        </div>
       </td>
     </tr>
   )

@@ -2,12 +2,11 @@ import { useState } from 'react'
 import DashboardRow from './DashboardRow'
 
 const COLUMNS = [
-  { key: 'property_label',        label: 'Propiedad' },
-  { key: 'tenant_name',           label: 'Arrendatario' },
-  { key: 'status',                label: 'Estado' },
-  { key: 'next_adjustment_date',  label: 'Reajuste' },
-  { key: 'current_payment_status',label: 'Pago' },
-  { key: 'current_rent',          label: 'Cobro',   align: 'right' },
+  { key: 'property_label',       label: 'Propiedad' },
+  { key: 'tenant_name',          label: 'Arrendatario' },
+  { key: 'status',               label: 'Estado' },
+  { key: 'payment_status',       label: 'Pagos' },
+  { key: 'next_adjustment_date', label: 'Prox. reajuste' },
 ]
 
 function compareValues(a, b, direction) {

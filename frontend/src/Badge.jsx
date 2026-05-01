@@ -1,10 +1,25 @@
 export function PaymentBadge({ status }) {
-  if (!status) return <span className="text-muted">—</span>
-  if (status === 'paid') {
+  if (status === 'paid_up' || status === 'paid') {
     return (
       <span className="badge badge-ok">
         <span className="badge-dot" />
-        Pagado
+        {status === 'paid_up' ? 'Al día' : 'Pagado'}
+      </span>
+    )
+  }
+  if (status === 'outstanding_balance') {
+    return (
+      <span className="badge badge-danger">
+        <span className="badge-dot" />
+        Saldo pendiente
+      </span>
+    )
+  }
+  if (status === 'missing_period') {
+    return (
+      <span className="badge badge-muted">
+        <span className="badge-dot" />
+        Sin período
       </span>
     )
   }
@@ -16,6 +31,7 @@ export function PaymentBadge({ status }) {
       </span>
     )
   }
+  if (!status) return <span className="text-muted">—</span>
   return (
     <span className="badge badge-danger">
       <span className="badge-dot" />

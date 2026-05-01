@@ -203,6 +203,10 @@ def get_dashboard():
                 "last_adjustment_date": last_adjustment_date,
                 "months_since_last_adjustment": months_since_last,
                 "current_payment_status": item.get("current_payment_status"),
+                "payment_status": item.get("payment_status"),
+                "period_amount": item.get("period_amount"),
+                "latest_period": item.get("latest_period"),
+                "contract_id": item.get("contract_id"),
             }
         )
 

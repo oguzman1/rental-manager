@@ -28,7 +28,7 @@ function deriveDueDate(period, paymentDay) {
   return `${period}-${String(day).padStart(2, '0')}`
 }
 
-function PaymentsView({ contract, onBack, onPaymentMutation }) {
+function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [payments, setPayments] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -69,7 +69,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation }) {
     loadPayments()
   }, [contract.id])
 
-  const thisPeriod = currentPeriod()
+  const thisPeriod = targetPeriod ?? currentPeriod()
   const currentPayment = payments.find((p) => p.period === thisPeriod)
 
   // Main action: POST period if missing, then PATCH with full amount + today.
@@ -238,7 +238,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation }) {
         {showCard && (
           <div className="current-period-card">
             <div className="current-period-meta">
-              <span className="current-period-label">Período actual</span>
+              <span className="current-period-label">Período a registrar</span>
               <span className="current-period-value">{thisPeriod}</span>
               <span className="payment-info-sep">·</span>
               <span className="current-period-detail">

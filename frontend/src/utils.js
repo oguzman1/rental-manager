@@ -60,6 +60,15 @@ export function nextMissingPeriod(payments) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 }
 
+const MONTHS_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+
+export function formatPeriod(period) {
+  if (!period) return 'Sin período'
+  const [year, month] = period.split('-').map(Number)
+  if (!year || !month || month < 1 || month > 12) return period
+  return `A ${MONTHS_ES[month - 1]} del ${year}`
+}
+
 export function contractDuration(startDateStr) {
   if (!startDateStr) return null
 

@@ -857,6 +857,252 @@ def test_dashboard_payment_status_paid_up():
     assert item["contract_id"] is not None
 
 
+# -----------------------------------------------------------------------
+# actionable_payment_period — alert must never target a paid period
+# -----------------------------------------------------------------------
+
+def _prev_month(today):
+    """Return (year, month) for the calendar month before today."""
+    m, y = today.month - 1, today.year
+    if m == 0:
+        m, y = 12, y - 1
+    return y, m
+
+
+def _make_alert_property(rol, address, fojas, prop_num):
+    """Create a minimal occupied property for alert tests.
+
+    start_date is set to the first day of next month so that
+    generate_payment_periods produces only future rows (period > current month).
+    This gives each test a clean slate — no pre-existing payment rows interfere
+    with the actionable_payment_period subquery or cause 409 conflicts.
+    """
+    today = datetime.date.today()
+    if today.month == 12:
+        next_year, next_month = today.year + 1, 1
+    else:
+        next_year, next_month = today.year, today.month + 1
+    start = f"{next_year}-{next_month:02d}-01"
+
+    r = client.post("/managed-property", json={
+        "property": {
+            "comuna": "TEST ALERTAS",
+            "rol": rol,
+            "address": address,
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": fojas,
+            "property_number": prop_num,
+            "year": 2023,
+            "fiscal_appraisal": 90000000,
+        },
+        "rental": {
+            "tenant_name": "Tenant Alert Test",
+            "payment_day": 10,
+            "property_label": f"prop {rol}",
+            "current_rent": 400000,
+            "adjustment_frequency": "annual",
+            "start_date": start,
+            "notice_days": 60,
+            "adjustment_month": "january",
+        },
+    })
+    assert r.status_code == 200
+    contracts = client.get("/contracts").json()
+    contract = next(c for c in contracts if c["rol"] == rol)
+    return contract["id"]
+
+
+def test_actionable_payment_period_null_when_latest_is_paid():
+    # Scenario: last month's period is paid, no record for current month.
+    # actionable_payment_period must be None (paid period must not appear as target).
+    today = datetime.date.today()
+    prev_y, prev_m = _prev_month(today)
+    prev_period = f"{prev_y}-{prev_m:02d}"
+
+    cid = _make_alert_property("07001-00001", "TEST ALERT ADDR 1", "7001", "7001")
+
+    # Create and fully pay last month's period
+    create_r = client.post(f"/contracts/{cid}/payments", json={"period": prev_period})
+    assert create_r.status_code == 200
+    pid = create_r.json()["id"]
+    expected = create_r.json()["expected_amount"]
+    patch_r = client.patch(f"/payments/{pid}", json={"paid_amount": expected})
+    assert patch_r.status_code == 200
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07001-00001")
+    assert item["actionable_payment_period"] is None, (
+        "a paid past period must not be exposed as the actionable target"
+    )
+    assert item["actionable_payment_status"] is None
+    assert item["actionable_payment_amount"] is None
+    # latest_period is unchanged — still points to the last recorded period
+    assert item["latest_period"] == prev_period
+
+
+def test_actionable_payment_period_oldest_unpaid_when_newer_is_paid():
+    # Scenario: older period is pending/partial, newer period is paid.
+    # actionable_payment_period must be the older unpaid period.
+    today = datetime.date.today()
+    prev_y, prev_m = _prev_month(today)
+    prev_period = f"{prev_y}-{prev_m:02d}"
+    prev2_y, prev2_m = _prev_month(datetime.date(prev_y, prev_m, 1))
+    prev2_period = f"{prev2_y}-{prev2_m:02d}"
+
+    cid = _make_alert_property("07002-00001", "TEST ALERT ADDR 2", "7002", "7002")
+
+    # Two months ago: partial payment
+    r2 = client.post(f"/contracts/{cid}/payments", json={"period": prev2_period})
+    assert r2.status_code == 200
+    pid2 = r2.json()["id"]
+    expected2 = r2.json()["expected_amount"]
+    client.patch(f"/payments/{pid2}", json={"paid_amount": expected2 // 2})
+
+    # Last month: fully paid
+    r1 = client.post(f"/contracts/{cid}/payments", json={"period": prev_period})
+    assert r1.status_code == 200
+    pid1 = r1.json()["id"]
+    expected1 = r1.json()["expected_amount"]
+    client.patch(f"/payments/{pid1}", json={"paid_amount": expected1})
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07002-00001")
+    assert item["actionable_payment_period"] == prev2_period, (
+        "oldest non-paid period must be the actionable target"
+    )
+    assert item["actionable_payment_status"] == "partial"
+    assert item["actionable_payment_amount"] == expected2
+
+
+def test_actionable_payment_period_surfaces_older_unpaid_when_current_paid():
+    # Scenario: current month is fully paid but an older period is pending.
+    # actionable_payment_period must be the older unpaid period even though
+    # current_payment_status is 'paid'.
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+    prev_y, prev_m = _prev_month(today)
+    prev_period = f"{prev_y}-{prev_m:02d}"
+
+    cid = _make_alert_property("07003-00001", "TEST ALERT ADDR 3", "7003", "7003")
+
+    # Last month: pending (no paid_amount)
+    r_prev = client.post(f"/contracts/{cid}/payments", json={"period": prev_period})
+    assert r_prev.status_code == 200
+
+    # Current month: fully paid
+    r_cur = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r_cur.status_code == 200
+    pid_cur = r_cur.json()["id"]
+    expected_cur = r_cur.json()["expected_amount"]
+    client.patch(f"/payments/{pid_cur}", json={"paid_amount": expected_cur})
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07003-00001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] == prev_period, (
+        "older unpaid period must surface even when current month is paid"
+    )
+    assert item["actionable_payment_status"] == "pending"
+
+
+def test_actionable_payment_period_null_when_all_paid():
+    # Scenario: all recorded periods are fully paid.
+    # actionable_payment_period must be None.
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+    prev_y, prev_m = _prev_month(today)
+    prev_period = f"{prev_y}-{prev_m:02d}"
+
+    cid = _make_alert_property("07004-00001", "TEST ALERT ADDR 4", "7004", "7004")
+
+    for period in (prev_period, current_period):
+        r = client.post(f"/contracts/{cid}/payments", json={"period": period})
+        assert r.status_code == 200
+        pid = r.json()["id"]
+        expected = r.json()["expected_amount"]
+        client.patch(f"/payments/{pid}", json={"paid_amount": expected})
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07004-00001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] is None
+    assert item["actionable_payment_status"] is None
+    assert item["actionable_payment_amount"] is None
+
+
+def test_stale_stored_status_does_not_create_actionable_alert():
+    # Diagnostic: a row with stored status='pending' but paid_amount=expected_amount
+    # must not produce a payment alert.  Amount-based truth takes precedence over
+    # the stored status column.
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+
+    cid = _make_alert_property("07005-00001", "TEST ALERT ADDR 5", "7005", "7005")
+
+    # Create a pending payment for the current month (status='pending')
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]
+
+    # Directly set paid_amount = expected_amount while leaving status='pending'
+    # (simulates a stale/inconsistent status column)
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("UPDATE payments SET paid_amount = ? WHERE id = ?", (expected, pid))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07005-00001")
+    assert item["actionable_payment_period"] is None, (
+        "a row with paid_amount=expected must not be actionable even if stored status is stale"
+    )
+    assert item["current_payment_status"] == "paid", (
+        "current_payment_status must be derived from amounts, not stored status"
+    )
+
+
+def test_actionable_payment_status_derived_from_amounts_not_stored_status():
+    # A partial payment (0 < paid_amount < expected_amount) must produce
+    # actionable_payment_status='partial' regardless of the stored status column.
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+
+    cid = _make_alert_property("07006-00001", "TEST ALERT ADDR 6", "7006", "7006")
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]
+    partial_paid = expected // 2
+
+    # Write paid_amount < expected directly, deliberately leaving status='pending'
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("UPDATE payments SET paid_amount = ? WHERE id = ?", (partial_paid, pid))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07006-00001")
+    assert item["actionable_payment_period"] == current_period
+    assert item["actionable_payment_status"] == "partial", (
+        "actionable_payment_status must be derived from amounts: paid_amount > 0 and < expected"
+    )
+    assert item["actionable_payment_amount"] == expected
+
+
+def test_pending_period_actionable_when_no_paid_amount():
+    # A period with no paid_amount at all must produce actionable_payment_status='pending'.
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+
+    cid = _make_alert_property("07007-00001", "TEST ALERT ADDR 7", "7007", "7007")
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    expected = r.json()["expected_amount"]
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "07007-00001")
+    assert item["actionable_payment_period"] == current_period
+    assert item["actionable_payment_status"] == "pending"
+    assert item["actionable_payment_amount"] == expected
+
+
 # --- GET /managed-property/{id} ---
 
 def test_get_managed_property_by_id_returns_occupied_with_rental():
@@ -1595,4 +1841,174 @@ def test_create_payment_with_full_amount_marks_paid():
         json={"period": "2026-07", "paid_amount": 500000, "paid_at": "2026-07-05"},
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "paid"
+
+
+# -----------------------------------------------------------------------
+# requires_adjustment_notice: fix — cleared by a recent rent change
+# -----------------------------------------------------------------------
+
+def test_requires_notice_false_after_adjustment_within_notice_window():
+    # Self-contained: creates its own property (09998-00001) and inserts a rent
+    # change via the API within the same test.
+    # start=2025-01-01, annual, adjustment_month=january, notice_days=30.
+    # At as_of=2026-12-15: next_adj=2027-01-01, notice_date=2026-12-01 → True.
+    # After registering effective_from=2026-12-10 (>= notice_date): → False.
+
+    rol = "09998-00001"
+    create_r = client.post("/managed-property", json={
+        "property": {
+            "comuna": "CASTRO",
+            "rol": rol,
+            "address": "GAMBOA TEST NOTICE FIX",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "998",
+            "property_number": "998",
+            "year": 2025,
+            "fiscal_appraisal": 10000000,
+        },
+        "rental": {
+            "tenant_name": "Tenant Notice Fix",
+            "payment_day": 5,
+            "property_label": "test notice fix",
+            "current_rent": 150000,
+            "adjustment_frequency": "annual",
+            "start_date": "2025-01-01",
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    })
+    assert create_r.status_code == 200
+
+    r_before = client.get("/rent-adjustments", params={"as_of": "2026-12-15"})
+    assert r_before.status_code == 200
+    item_before = next(i for i in r_before.json() if i["rol"] == rol)
+    assert item_before["requires_adjustment_notice"] is True, (
+        "pre-condition: alert must be active before registering the adjustment"
+    )
+
+    contract_id = item_before["contract_id"]
+    rc_r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2026-12-10", "amount": 160000},
+    )
+    assert rc_r.status_code == 201
+
+    r_after = client.get("/rent-adjustments", params={"as_of": "2026-12-15"})
+    item_after = next(i for i in r_after.json() if i["rol"] == rol)
+    assert item_after["requires_adjustment_notice"] is False, (
+        "alert must disappear after registering a rent change within the notice window"
+    )
+
+
+def test_requires_notice_true_when_last_adjustment_predates_notice_window():
+    # Self-contained: creates its own property (02162-00099) and inserts a past
+    # rent change via the API within the same test.
+    # start=2022-03-12, annual, adjustment_month=march.
+    # A rent change at 2023-05-01 predates the 2027 notice window (2027-02-12).
+    # At as_of=2027-02-15: next_adj=2027-03-12, notice_date=2027-02-12.
+    # last_adjustment_date=2023-05-01 < 2027-02-12 → alert must still be active.
+
+    rol = "02162-00099"
+    create_r = client.post("/managed-property", json={
+        "property": {
+            "comuna": "LA SERENA",
+            "rol": rol,
+            "address": "BALMACEDA TEST NOTICE PRED",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "9999",
+            "property_number": "9999",
+            "year": 2016,
+            "fiscal_appraisal": 142935366,
+        },
+        "rental": {
+            "tenant_name": "Tenant Predates Test",
+            "payment_day": 5,
+            "property_label": "test predates notice",
+            "current_rent": 801875,
+            "adjustment_frequency": "annual",
+            "start_date": "2022-03-12",
+            "notice_days": 60,
+            "adjustment_month": "march",
+        },
+    })
+    assert create_r.status_code == 200
+
+    # Fetch the contract_id, then insert the past rent change within this test.
+    r_adj = client.get("/rent-adjustments", params={"as_of": "2024-01-01"})
+    assert r_adj.status_code == 200
+    item_mid = next(i for i in r_adj.json() if i["rol"] == rol)
+    contract_id = item_mid["contract_id"]
+
+    rc_r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": "2023-05-01", "amount": 850000},
+    )
+    assert rc_r.status_code == 201
+
+    r = client.get("/rent-adjustments", params={"as_of": "2027-02-15"})
+    assert r.status_code == 200
+    item = next(i for i in r.json() if i["rol"] == rol)
+    assert item["requires_adjustment_notice"] is True, (
+        "alert must remain active when the last adjustment predates the current notice window"
+    )
+
+
+def test_dashboard_requires_notice_false_after_adjustment():
+    # Creates a fresh property whose notice window starts on the 1st of the current month,
+    # so today is guaranteed to be inside the window regardless of the day.
+
+    today = datetime.date.today()
+    month = today.month - 11
+    year = today.year
+    if month <= 0:
+        month += 12
+        year -= 1
+    start_date_str = f"{year}-{month:02d}-01"
+
+    rol = "06600-00001"
+    payload = {
+        "property": {
+            "comuna": "TEST NOTICE",
+            "rol": rol,
+            "address": "TEST ADDR 1",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "1",
+            "property_number": "1",
+            "year": 2020,
+            "fiscal_appraisal": 1000000,
+        },
+        "rental": {
+            "tenant_name": "Tenant Notice Test",
+            "payment_day": 5,
+            "property_label": "test notice prop",
+            "current_rent": 400000,
+            "adjustment_frequency": "annual",
+            "start_date": start_date_str,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    }
+    create_r = client.post("/managed-property", json=payload)
+    assert create_r.status_code == 200
+
+    dash1 = client.get("/dashboard").json()
+    item1 = next(i for i in dash1 if i["rol"] == rol)
+    assert item1["requires_adjustment_notice"] is True, (
+        "pre-condition: dashboard must show alert when today is in the notice window"
+    )
+
+    contract_id = item1["contract_id"]
+    rc_r = client.post(
+        f"/contracts/{contract_id}/rent-changes",
+        json={"effective_from": today.isoformat(), "amount": 420000},
+    )
+    assert rc_r.status_code == 201
+
+    dash2 = client.get("/dashboard").json()
+    item2 = next(i for i in dash2 if i["rol"] == rol)
+    assert item2["requires_adjustment_notice"] is False, (
+        "dashboard must clear the alert after a rent change within the notice window"
+    )

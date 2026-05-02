@@ -69,6 +69,13 @@ export function formatPeriod(period) {
   return `A ${MONTHS_ES[month - 1]} del ${year}`
 }
 
+export function formatRentPeriod(period) {
+  if (!period) return null
+  const [year, month] = period.split('-').map(Number)
+  if (!year || !month || month < 1 || month > 12) return null
+  return `Arriendo ${MONTHS_ES[month - 1].toLowerCase()} ${year}`
+}
+
 export function formatNextAdjustment(isoDate) {
   if (!isoDate) return null
   const days = daysUntil(isoDate)

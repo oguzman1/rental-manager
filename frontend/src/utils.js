@@ -69,6 +69,33 @@ export function formatPeriod(period) {
   return `A ${MONTHS_ES[month - 1]} del ${year}`
 }
 
+export function formatNextAdjustment(isoDate) {
+  if (!isoDate) return null
+  const days = daysUntil(isoDate)
+  if (days === null) return null
+  if (days < 0) {
+    const abs = Math.abs(days)
+    return abs === 1 ? 'Pendiente hace 1 día' : `Pendiente hace ${abs} días`
+  }
+  if (days === 0) return 'Hoy'
+  if (days === 1) return 'Mañana'
+  if (days < 30) return `En ${days} días`
+  const months = Math.floor(days / 30)
+  const remainingDays = days % 30
+  const monthStr = months === 1 ? '1 mes' : `${months} meses`
+  if (remainingDays === 0) return `En ${monthStr}`
+  const dayStr = remainingDays === 1 ? '1 día' : `${remainingDays} días`
+  return `En ${monthStr} y ${dayStr}`
+}
+
+export function formatRentSince(startDate, lastAdjDate) {
+  const raw = lastAdjDate ?? startDate
+  if (!raw) return null
+  const [year, month] = raw.split('-')
+  if (!year || !month) return null
+  return `${month}/${year.slice(2)}`
+}
+
 export function contractDuration(startDateStr) {
   if (!startDateStr) return null
 

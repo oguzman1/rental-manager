@@ -219,6 +219,8 @@ class PaymentSource(str, Enum):
 
 class PaymentCreate(BaseModel):
     period: str
+    paid_amount: int | None = Field(default=None, ge=0)
+    paid_at: date | None = None
     comment: str | None = None
 
     @field_validator("period")
@@ -247,6 +249,7 @@ class PaymentResponse(BaseModel):
     source: PaymentSource
     comment: str | None = None
     created_at: date
+    overpayment: int = 0
 
 
 class TenantCreate(BaseModel):

@@ -913,6 +913,49 @@
 
 .btn-link-secondary:hover { color: var(--ink); }
 
+/* Overpayment indicator row */
+.overpayment-row td { border-bottom: none; }
+
+.overpayment-cell {
+  padding: 6px 12px 10px !important;
+  background: var(--warn-bg);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+.overpayment-label {
+  font-size: 12px;
+  color: var(--warn-fg);
+  font-family: var(--font-mono);
+}
+
+.btn-warn-sm {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--warn-fg);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--warn-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+}
+
+.btn-warn-sm:hover { background: var(--warn-bg); filter: brightness(0.95); }
+.btn-warn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Payment table toolbar */
+.payment-table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
 /* ============================================================
    Form helpers (used by CRUD forms in inner pages)
    ============================================================ */

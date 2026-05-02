@@ -1,63 +1,122 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { PaymentBadge } from './Badge'
-import { formatCLP, nextMissingPeriod } from './utils'
+import { formatCLP } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
-function currentPeriod() {
-  const now = new Date()
-  const mm = String(now.getMonth() + 1).padStart(2, '0')
-  return `${now.getFullYear()}-${mm}`
+const MONTHS_ES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+]
+
+const STATUS_ES = { pending: 'Pendiente', partial: 'Parcial', paid: 'Pagado' }
+
+function formatPeriodLabel(period) {
+  const [year, month] = period.split('-')
+  return `${MONTHS_ES[parseInt(month, 10) - 1]} ${year}`
 }
 
 function todayLocal() {
   const now = new Date()
-  const yyyy = now.getFullYear()
-  const mm = String(now.getMonth() + 1).padStart(2, '0')
-  const dd = String(now.getDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-')
 }
 
-// Mirrors backend derivation: clamps day to last day of month.
-function deriveDueDate(period, paymentDay) {
-  const year = parseInt(period.slice(0, 4))
-  const month = parseInt(period.slice(5, 7))
-  const lastDay = new Date(year, month, 0).getDate()
-  const day = Math.min(paymentDay, lastDay)
-  return `${period}-${String(day).padStart(2, '0')}`
+// A period is visible by default if its due_date is today or in the past,
+// or within the next 5 calendar days.
+function isVisibleByDefault(dueDate) {
+  if (!dueDate) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const cutoff = new Date(today)
+  cutoff.setDate(cutoff.getDate() + 5)
+  const due = new Date(dueDate + 'T00:00:00')
+  return due <= cutoff
+}
+
+// Returns the amount to prefill in "Agregar pago":
+// - pending/null → expected_amount
+// - partial → remaining balance (expected - paid)
+// - paid → '' (no prefill; user can still type)
+function getPrefillAmount(payment) {
+  if (!payment) return ''
+  if (payment.status === 'paid') return ''
+  if (payment.status === 'partial' && payment.paid_amount != null) {
+    return String(Math.max(0, payment.expected_amount - payment.paid_amount))
+  }
+  return String(payment.expected_amount)
+}
+
+// Chilean thousands formatting: 225000 → "225.000"
+function formatAmountInput(value) {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  if (!digits) return ''
+  return Number(digits).toLocaleString('es-CL')
+}
+
+// Strip dots and parse back to integer for the API
+function parseAmountInput(value) {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  return digits ? Number(digits) : 0
+}
+
+// Returns the next payable period using priority:
+//   1. earliest partial  2. earliest pending  3. virtual next month (all paid)
+function getNextPayablePeriod(payments, sortedPayments) {
+  const asc = [...payments].sort((a, b) => a.period.localeCompare(b.period))
+  const partial = asc.find(p => p.status === 'partial')
+  if (partial) return { period: partial.period, payment: partial, isVirtual: false }
+  const pending = asc.find(p => p.status === 'pending')
+  if (pending) return { period: pending.period, payment: pending, isVirtual: false }
+  if (sortedPayments.length > 0) {
+    const [y, m] = sortedPayments[0].period.split('-').map(Number)
+    const nextM = m === 12 ? 1 : m + 1
+    const nextY = m === 12 ? y + 1 : y
+    const period = `${nextY}-${String(nextM).padStart(2, '0')}`
+    return { period, payment: null, isVirtual: true }
+  }
+  return { period: '', payment: null, isVirtual: false }
 }
 
 function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [payments, setPayments] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showFuture, setShowFuture] = useState(false)
 
-  // null | { type: 'create' } | { type: 'update', payment }
+  // 'add' | 'edit' | null
   const [activeForm, setActiveForm] = useState(null)
   const [formError, setFormError] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Main "Marcar pagado hoy" action state
-  const [isRegistering, setIsRegistering] = useState(false)
-  const [registerError, setRegisterError] = useState(null)
+  // "Agregar pago" form
+  const [formPeriod, setFormPeriod] = useState('')
+  const [formUseCustom, setFormUseCustom] = useState(false)
+  const [formCustomPeriod, setFormCustomPeriod] = useState('')
+  const [formAmount, setFormAmount] = useState('')
+  const [formDate, setFormDate] = useState(todayLocal())
+  const [formNote, setFormNote] = useState('')
 
-  // Manual creation form fields
-  const [period, setPeriod] = useState(currentPeriod())
-  const [createComment, setCreateComment] = useState('')
+  // Edit form
+  const [editPayment, setEditPayment] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editDate, setEditDate] = useState('')
+  const [editNote, setEditNote] = useState('')
 
-  // Edit form fields
-  const [paidAmount, setPaidAmount] = useState('')
-  const [paidAt, setPaidAt] = useState('')
-  const [updateComment, setUpdateComment] = useState('')
+  // Overpayment
+  const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
+  const [overpaymentError, setOverpaymentError] = useState(null)
 
   async function loadPayments() {
-    setIsLoading(true)
-    setError(null)
     try {
       const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`)
       if (!res.ok) throw new Error(`Error ${res.status}`)
       setPayments(await res.json())
+      setError(null)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -67,7 +126,6 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
 
   useEffect(() => {
     let cancelled = false
-
     async function fetchData() {
       try {
         const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`)
@@ -75,7 +133,6 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         const data = await res.json()
         if (!cancelled) {
           setPayments(data)
-          setError(null)
           setIsLoading(false)
         }
       } catch (err) {
@@ -85,78 +142,86 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         }
       }
     }
-
     fetchData()
     return () => { cancelled = true }
   }, [contract.id])
 
-  const thisPeriod = targetPeriod ?? currentPeriod()
-  const currentPayment = payments.find((p) => p.period === thisPeriod)
+  const sortedPayments = [...payments].sort((a, b) => b.period.localeCompare(a.period))
+  const visiblePayments = showFuture
+    ? sortedPayments
+    : sortedPayments.filter(p => isVisibleByDefault(p.due_date))
+  const hiddenCount = payments.length - visiblePayments.length
 
-  // Main action: POST period if missing, then PATCH with full amount + today.
-  async function registerCurrentPeriod() {
-    setIsRegistering(true)
-    setRegisterError(null)
-    const today = todayLocal()
+  // Next calendar month after the last known period — used as virtual "Próximo período" option
+  const nextVirtualPeriod = (() => {
+    if (sortedPayments.length === 0) return null
+    const [y, m] = sortedPayments[0].period.split('-').map(Number)
+    const nextM = m === 12 ? 1 : m + 1
+    const nextY = m === 12 ? y + 1 : y
+    return `${nextY}-${String(nextM).padStart(2, '0')}`
+  })()
 
-    try {
-      let paymentId
-      let expectedAmount
+  function openAdd() {
+    if (payments.length === 0) {
+      setFormPeriod('')
+      setFormUseCustom(true)
+      setFormCustomPeriod(todayLocal().slice(0, 7))
+      setFormAmount(contract.current_rent != null ? formatAmountInput(contract.current_rent) : '')
+      setFormDate(todayLocal())
+      setFormNote('')
+      setFormError(null)
+      setActiveForm('add')
+      return
+    }
 
-      if (!currentPayment) {
-        const postRes = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ period: thisPeriod }),
-        })
-        if (!postRes.ok) throw new Error(`Error ${postRes.status}`)
-        const created = await postRes.json()
-        paymentId = created.id
-        expectedAmount = created.expected_amount
-      } else {
-        paymentId = currentPayment.id
-        expectedAmount = currentPayment.expected_amount
-      }
+    if (targetPeriod) {
+      const p = payments.find(py => py.period === targetPeriod) ?? null
+      setFormPeriod(targetPeriod)
+      setFormUseCustom(p === null && targetPeriod !== nextVirtualPeriod)
+      setFormCustomPeriod(p === null && targetPeriod !== nextVirtualPeriod ? targetPeriod : '')
+      setFormAmount(formatAmountInput(p ? getPrefillAmount(p) : contract.current_rent))
+      setFormDate(todayLocal())
+      setFormNote('')
+      setFormError(null)
+      setActiveForm('add')
+      return
+    }
 
-      const patchRes = await fetch(`${API_BASE}/payments/${paymentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paid_amount: expectedAmount, paid_at: today }),
-      })
+    const { period, payment, isVirtual } = getNextPayablePeriod(payments, sortedPayments)
+    setFormPeriod(period)
+    setFormUseCustom(false)
+    setFormCustomPeriod('')
+    setFormAmount(formatAmountInput(isVirtual ? contract.current_rent : getPrefillAmount(payment)))
+    setFormDate(todayLocal())
+    setFormNote('')
+    setFormError(null)
+    setActiveForm('add')
+  }
 
-      if (!patchRes.ok) {
-        // Period was created but could not be marked as paid.
-        setRegisterError(
-          'Se creó el período, pero no se pudo marcar como pagado. Puedes editarlo abajo.'
-        )
-        await loadPayments()
-        await onPaymentMutation?.()
-        return
-      }
-
-      await loadPayments()
-      await onPaymentMutation?.()
-    } catch (err) {
-      setRegisterError(err.message)
-    } finally {
-      setIsRegistering(false)
+  function handlePeriodSelect(value) {
+    if (value === '__custom__') {
+      setFormUseCustom(true)
+      return
+    }
+    setFormPeriod(value)
+    const p = payments.find(py => py.period === value)
+    if (p) {
+      setFormAmount(formatAmountInput(getPrefillAmount(p)))
+      setFormDate(p.paid_at ?? todayLocal())
+    } else {
+      // Virtual period not yet created — default to expected monthly rent
+      setFormAmount(formatAmountInput(contract.current_rent))
+      setFormDate(todayLocal())
     }
   }
 
-  function openCreate() {
-    setPeriod(nextMissingPeriod(payments))
-    setCreateComment('')
+  function openEdit(payment) {
+    setEditPayment(payment)
+    setEditAmount(formatAmountInput(payment.paid_amount ?? payment.expected_amount))
+    setEditDate(payment.paid_at ?? todayLocal())
+    setEditNote(payment.comment ?? '')
     setFormError(null)
-    setActiveForm({ type: 'create' })
-  }
-
-  function openUpdate(payment) {
-    // Pre-fill with expected_amount (editable) and today if no paid_at recorded.
-    setPaidAmount(String(payment.expected_amount))
-    setPaidAt(payment.paid_at ?? todayLocal())
-    setUpdateComment(payment.comment ?? '')
-    setFormError(null)
-    setActiveForm({ type: 'update', payment })
+    setActiveForm('edit')
   }
 
   function cancelForm() {
@@ -164,23 +229,68 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     setFormError(null)
   }
 
-  async function handleCreate(e) {
+  async function handleAdd(e) {
+    e.preventDefault()
+    setIsSubmitting(true)
+    setFormError(null)
+    const period = formUseCustom ? formCustomPeriod : formPeriod
+    const amount = parseAmountInput(formAmount)
+    try {
+      const existing = payments.find(p => p.period === period)
+      if (existing) {
+        const res = await fetch(`${API_BASE}/payments/${existing.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paid_amount: (existing.paid_amount ?? 0) + amount,
+            paid_at: formDate,
+            ...(formNote ? { comment: formNote } : {}),
+          }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+      } else {
+        const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            period,
+            paid_amount: amount || null,
+            paid_at: formDate || null,
+            comment: formNote || null,
+          }),
+        })
+        if (res.status === 409) {
+          setFormError(`Ya existe un pago para el período ${period}.`)
+          return
+        }
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+      }
+      setActiveForm(null)
+      await loadPayments()
+      await onPaymentMutation?.()
+    } catch (err) {
+      setFormError(err.message)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  async function handleEdit(e) {
     e.preventDefault()
     setIsSubmitting(true)
     setFormError(null)
     try {
-      const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
-        method: 'POST',
+      const body = {}
+      if (editAmount !== '') body.paid_amount = parseAmountInput(editAmount)
+      if (editDate !== '') body.paid_at = editDate
+      if (editNote !== '') body.comment = editNote
+      const res = await fetch(`${API_BASE}/payments/${editPayment.id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ period, comment: createComment || null }),
+        body: JSON.stringify(body),
       })
-      if (res.status === 409) {
-        setFormError(`Ya existe un pago para el período ${period}.`)
-        return
-      }
       if (!res.ok) throw new Error(`Error ${res.status}`)
       setActiveForm(null)
-      setFormError(null)
       await loadPayments()
       await onPaymentMutation?.()
     } catch (err) {
@@ -194,46 +304,36 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     if (!window.confirm(`¿Eliminar el pago de ${payment.period}?`)) return
     try {
       const res = await fetch(`${API_BASE}/payments/${payment.id}`, { method: 'DELETE' })
-      if (res.status === 404) {
-        setRegisterError('El pago ya no existe.')
-        return
-      }
       if (!res.ok) throw new Error(`Error ${res.status}`)
       await loadPayments()
       await onPaymentMutation?.()
     } catch (err) {
-      setRegisterError(err.message)
+      setError(err.message)
     }
   }
 
-  async function handleUpdate(e) {
-    e.preventDefault()
-    setIsSubmitting(true)
-    setFormError(null)
+  async function handleApplyOverpayment(payment) {
+    setApplyingOverpayment(prev => new Set([...prev, payment.id]))
+    setOverpaymentError(null)
     try {
-      const body = {}
-      if (paidAmount !== '') body.paid_amount = Number(paidAmount)
-      if (paidAt !== '') body.paid_at = paidAt
-      if (updateComment !== '') body.comment = updateComment
-
-      const res = await fetch(`${API_BASE}/payments/${activeForm.payment.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const res = await fetch(`${API_BASE}/payments/${payment.id}/apply-overpayment`, {
+        method: 'POST',
       })
       if (!res.ok) throw new Error(`Error ${res.status}`)
-      setActiveForm(null)
-      setFormError(null)
       await loadPayments()
       await onPaymentMutation?.()
     } catch (err) {
-      setFormError(err.message)
+      setOverpaymentError(err.message)
     } finally {
-      setIsSubmitting(false)
+      setApplyingOverpayment(prev => {
+        const next = new Set(prev)
+        next.delete(payment.id)
+        return next
+      })
     }
   }
 
-  const showCard = !isLoading && !error
+  const periodOptions = [...payments].sort((a, b) => a.period.localeCompare(b.period))
 
   return (
     <>
@@ -255,67 +355,63 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           <span>Día de pago: {contract.payment_day}</span>
         </div>
 
-        {/* Período actual — acción principal */}
-        {showCard && (
-          <div className="current-period-card">
-            <div className="current-period-meta">
-              <span className="current-period-label">Período a registrar</span>
-              <span className="current-period-value">{thisPeriod}</span>
-              <span className="payment-info-sep">·</span>
-              <span className="current-period-detail">
-                Vence: {currentPayment?.due_date ?? deriveDueDate(thisPeriod, contract.payment_day)}
-              </span>
-              <span className="payment-info-sep">·</span>
-              <span className="current-period-detail">
-                Esperado: {formatCLP(currentPayment?.expected_amount ?? contract.current_rent)}
-              </span>
-              {currentPayment && (
-                <>
-                  <span className="payment-info-sep">·</span>
-                  <PaymentBadge status={currentPayment.status} />
-                </>
-              )}
-            </div>
-
-            <div className="current-period-actions">
-              {(!currentPayment || currentPayment.status === 'pending') && (
-                <button
-                  className="btn-primary"
-                  onClick={registerCurrentPeriod}
-                  disabled={isRegistering}
-                >
-                  {isRegistering ? 'Registrando…' : 'Registrar pago completo'}
-                </button>
-              )}
-              {currentPayment && (
-                <button
-                  className="btn-payments"
-                  onClick={() => openUpdate(currentPayment)}
-                >
-                  Editar
-                </button>
-              )}
-            </div>
-
-            {registerError && (
-              <div className="payment-form-error">{registerError}</div>
-            )}
-          </div>
-        )}
-
-        {/* Formulario de edición */}
-        {activeForm?.type === 'update' && (
-          <form className="payment-form" onSubmit={handleUpdate}>
+        {/* Agregar pago form */}
+        {activeForm === 'add' && (
+          <form className="payment-form" onSubmit={handleAdd}>
             <div className="payment-form-row">
+              {!formUseCustom ? (
+                <label className="payment-form-label">
+                  Período
+                  <select
+                    className="payment-form-input"
+                    value={formPeriod}
+                    onChange={e => handlePeriodSelect(e.target.value)}
+                  >
+                    {periodOptions.map(p => (
+                      <option key={p.period} value={p.period}>
+                        {formatPeriodLabel(p.period)} — {STATUS_ES[p.status] ?? p.status}
+                      </option>
+                    ))}
+                    {nextVirtualPeriod && !payments.some(p => p.period === nextVirtualPeriod) && (
+                      <option value={nextVirtualPeriod}>
+                        Próximo período — {formatPeriodLabel(nextVirtualPeriod)}
+                      </option>
+                    )}
+                    <option value="__custom__">Otro período…</option>
+                  </select>
+                </label>
+              ) : (
+                <label className="payment-form-label">
+                  Período
+                  <input
+                    className="payment-form-input"
+                    type="text"
+                    value={formCustomPeriod}
+                    onChange={e => setFormCustomPeriod(e.target.value)}
+                    placeholder="ej. 2025-04"
+                    required
+                  />
+                  {payments.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn-link-secondary"
+                      onClick={() => setFormUseCustom(false)}
+                    >
+                      ← Seleccionar de lista
+                    </button>
+                  )}
+                </label>
+              )}
               <label className="payment-form-label">
-                Monto pagado
+                Monto a registrar
                 <input
                   className="payment-form-input"
-                  type="number"
-                  min="0"
-                  value={paidAmount}
-                  onChange={(e) => setPaidAmount(e.target.value)}
-                  placeholder="ej. 500000"
+                  type="text"
+                  inputMode="numeric"
+                  value={formAmount}
+                  onChange={e => setFormAmount(formatAmountInput(e.target.value))}
+                  placeholder={`ej. ${formatAmountInput(contract.current_rent)}`}
+                  required
                 />
               </label>
               <label className="payment-form-label">
@@ -323,8 +419,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 <input
                   className="payment-form-input"
                   type="date"
-                  value={paidAt}
-                  onChange={(e) => setPaidAt(e.target.value)}
+                  value={formDate}
+                  onChange={e => setFormDate(e.target.value)}
+                  required
                 />
               </label>
               <label className="payment-form-label">
@@ -332,8 +429,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 <input
                   className="payment-form-input"
                   type="text"
-                  value={updateComment}
-                  onChange={(e) => setUpdateComment(e.target.value)}
+                  value={formNote}
+                  onChange={e => setFormNote(e.target.value)}
                   placeholder="opcional"
                 />
               </label>
@@ -350,19 +447,36 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           </form>
         )}
 
-        {/* Formulario manual de creación (flujo secundario) */}
-        {activeForm?.type === 'create' && (
-          <form className="payment-form" onSubmit={handleCreate}>
+        {/* Edit form */}
+        {activeForm === 'edit' && (
+          <form className="payment-form" onSubmit={handleEdit}>
             <div className="payment-form-row">
               <label className="payment-form-label">
                 Período
                 <input
                   className="payment-form-input"
                   type="text"
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                  placeholder="ej. 2025-04"
-                  required
+                  value={editPayment?.period ?? ''}
+                  disabled
+                />
+              </label>
+              <label className="payment-form-label">
+                Monto pagado total
+                <input
+                  className="payment-form-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={editAmount}
+                  onChange={e => setEditAmount(formatAmountInput(e.target.value))}
+                />
+              </label>
+              <label className="payment-form-label">
+                Fecha pago
+                <input
+                  className="payment-form-input"
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
                 />
               </label>
               <label className="payment-form-label">
@@ -370,14 +484,14 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 <input
                   className="payment-form-input"
                   type="text"
-                  value={createComment}
-                  onChange={(e) => setCreateComment(e.target.value)}
+                  value={editNote}
+                  onChange={e => setEditNote(e.target.value)}
                   placeholder="opcional"
                 />
               </label>
               <div className="payment-form-actions">
                 <button className="btn-primary" type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? 'Creando…' : 'Crear'}
+                  {isSubmitting ? 'Guardando…' : 'Guardar'}
                 </button>
                 <button className="btn-secondary" type="button" onClick={cancelForm}>
                   Cancelar
@@ -388,33 +502,40 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           </form>
         )}
 
-        {/* Loading / error */}
         {isLoading && <div className="app-loading">Cargando pagos…</div>}
         {!isLoading && error && <div className="app-error">Error al cargar: {error}</div>}
 
-        {/* Empty state */}
-        {!isLoading && !error && payments.length === 0 && (
-          <div className="payment-empty">
-            <p className="payment-empty-text">Sin pagos registrados para este contrato.</p>
+        {/* Toolbar: main action + future toggle — toggle is always independent of activeForm */}
+        {!isLoading && !error && (
+          <div className="payment-table-toolbar">
             {!activeForm && (
-              <button className="btn-link-secondary" onClick={openCreate}>
-                + Agregar período manual
+              <button className="btn-primary" onClick={openAdd}>
+                + Agregar pago
+              </button>
+            )}
+            {!showFuture ? (
+              <button className="btn-link-secondary" onClick={() => setShowFuture(true)}>
+                Mostrar períodos futuros{hiddenCount > 0 ? ` (${hiddenCount})` : ''}
+              </button>
+            ) : (
+              <button className="btn-link-secondary" onClick={() => setShowFuture(false)}>
+                Ocultar períodos futuros
               </button>
             )}
           </div>
         )}
 
-        {/* Tabla de historial */}
-        {!isLoading && !error && payments.length > 0 && (
+        {/* Empty state */}
+        {!isLoading && !error && payments.length === 0 && (
+          <div className="payment-empty">
+            <p className="payment-empty-text">Sin períodos generados para este contrato.</p>
+          </div>
+        )}
+
+        {/* Period table */}
+        {!isLoading && !error && visiblePayments.length > 0 && (
           <div className="table-scroll">
             <div className="table-wrapper">
-              {!activeForm && (
-                <div className="payment-table-header">
-                  <button className="btn-link-secondary" onClick={openCreate}>
-                    + Agregar período manual
-                  </button>
-                </div>
-              )}
               <table className="dashboard-table">
                 <thead>
                   <tr>
@@ -425,56 +546,75 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                     <th className="th">Fecha pago</th>
                     <th className="th">Estado</th>
                     <th className="th">Nota</th>
-                    <th className="th">Acción</th>
+                    <th className="th">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {payments.map((p) => (
-                    <tr key={p.id} className="table-row-static">
-                      <td className="td td-mono">{p.period}</td>
-                      <td className="td td-mono td-muted">{p.due_date}</td>
-                      <td className="td td-right td-mono">
-                        {formatCLP(p.expected_amount)}
-                      </td>
-                      <td className="td td-right td-mono">
-                        {p.paid_amount != null
-                          ? formatCLP(p.paid_amount)
-                          : <span className="text-muted">—</span>}
-                      </td>
-                      <td className="td td-mono td-muted">
-                        {p.paid_at ?? <span className="text-muted">—</span>}
-                      </td>
-                      <td className="td">
-                        <PaymentBadge status={p.status} />
-                      </td>
-                      <td className="td td-muted">
-                        {p.comment ?? <span className="text-muted">—</span>}
-                      </td>
-                      <td className="td">
-                        <button
-                          className="btn-payments"
-                          onClick={() => openUpdate(p)}
-                        >
-                          Editar
-                        </button>
-                        {' '}
-                        <button
-                          className="btn-payments-danger"
-                          onClick={() => handleDelete(p)}
-                        >
-                          Eliminar
-                        </button>
-                      </td>
-                    </tr>
+                  {visiblePayments.map(p => (
+                    <Fragment key={p.id}>
+                      <tr className="table-row-static">
+                        <td className="td td-mono">{p.period}</td>
+                        <td className="td td-mono td-muted">{p.due_date}</td>
+                        <td className="td td-right td-mono">{formatCLP(p.expected_amount)}</td>
+                        <td className="td td-right td-mono">
+                          {p.paid_amount != null
+                            ? formatCLP(p.paid_amount)
+                            : <span className="text-muted">—</span>}
+                        </td>
+                        <td className="td td-mono td-muted">
+                          {p.paid_at ?? <span className="text-muted">—</span>}
+                        </td>
+                        <td className="td">
+                          <PaymentBadge status={p.status} />
+                        </td>
+                        <td className="td td-muted">
+                          {p.comment ?? <span className="text-muted">—</span>}
+                        </td>
+                        <td className="td">
+                          <button className="btn-payments" onClick={() => openEdit(p)}>
+                            Editar
+                          </button>
+                          {' '}
+                          <button className="btn-payments-danger" onClick={() => handleDelete(p)}>
+                            Eliminar
+                          </button>
+                        </td>
+                      </tr>
+                      {p.overpayment > 0 && (
+                        <tr className="overpayment-row">
+                          <td colSpan={8} className="overpayment-cell">
+                            <span className="overpayment-label">
+                              Sobrepago: {formatCLP(p.overpayment)}
+                            </span>
+                            <button
+                              className="btn-warn-sm"
+                              onClick={() => handleApplyOverpayment(p)}
+                              disabled={applyingOverpayment.has(p.id)}
+                            >
+                              {applyingOverpayment.has(p.id)
+                                ? 'Aplicando…'
+                                : 'Abonar al próximo periodo'}
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
               <div className="table-footer">
                 <span>
-                  {payments.length} período{payments.length !== 1 ? 's' : ''}
+                  {visiblePayments.length} período{visiblePayments.length !== 1 ? 's' : ''}
+                  {!showFuture && hiddenCount > 0 && ` · ${hiddenCount} futuros ocultos`}
                 </span>
               </div>
             </div>
+          </div>
+        )}
+
+        {overpaymentError && (
+          <div className="payment-form-error" style={{ padding: '8px 20px' }}>
+            {overpaymentError}
           </div>
         )}
       </div>

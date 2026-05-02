@@ -62,6 +62,15 @@ export function nextMissingPeriod(payments) {
 
 const MONTHS_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
+export function formatPeriodLabel(period) {
+  if (!period) return 'Sin período'
+  const [yearStr, monthStr] = period.split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  if (!year || !month || month < 1 || month > 12) return period
+  return `${MONTHS_ES[month - 1]} ${year}`
+}
+
 export function formatPeriod(period) {
   if (!period) return 'Sin período'
   const [year, month] = period.split('-').map(Number)

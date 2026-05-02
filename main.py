@@ -12,6 +12,7 @@ from adjustments import (
     months_between,
 )
 from db import (
+    apply_overpayment_to_next_period,
     close_contract,
     create_contract,
     delete_managed_property,
@@ -653,14 +654,28 @@ def create_payment(contract_id: int, data: PaymentCreate):
         raise HTTPException(status_code=404, detail="Active contract not found.")
 
     due_date = _derive_due_date(data.period, contract["payment_day"])
+    expected_amount = contract["current_rent"]
+
+    paid_amount = data.paid_amount
+    paid_at = str(data.paid_at) if data.paid_at is not None else None
+
+    if paid_amount is None or paid_amount == 0:
+        status = "pending"
+    elif paid_amount >= expected_amount:
+        status = "paid"
+    else:
+        status = "partial"
 
     try:
         payment_id = insert_payment(
             contract_id=contract_id,
             period=data.period,
             due_date=str(due_date),
-            expected_amount=contract["current_rent"],
+            expected_amount=expected_amount,
             comment=data.comment,
+            paid_amount=paid_amount,
+            paid_at=paid_at,
+            status=status,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -709,12 +724,12 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
 
     if paid_amount is None:
         status = payment["status"]
+    elif paid_amount == 0:
+        status = "pending"
     elif paid_amount >= payment["expected_amount"]:
         status = "paid"
-    elif paid_amount > 0:
-        status = "partial"
     else:
-        status = payment["status"]
+        status = "partial"
 
     update_payment(payment_id, paid_amount, paid_at, status, comment)
     return get_payment(payment_id)
@@ -734,6 +749,25 @@ def delete_payment_endpoint(payment_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Payment not found.")
     return Response(status_code=204)
+
+
+@app.post(
+    "/payments/{payment_id}/apply-overpayment",
+    tags=["payments"],
+    summary="Apply overpayment from this period to the next monthly period",
+    responses={
+        400: {"model": ErrorResponse, "description": "No overpayment to apply"},
+        404: {"model": ErrorResponse, "description": "Payment not found"},
+    },
+)
+def apply_payment_overpayment(payment_id: int):
+    try:
+        current, next_payment = apply_overpayment_to_next_period(payment_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"current": current, "next": next_payment}
 
 
 @app.get(

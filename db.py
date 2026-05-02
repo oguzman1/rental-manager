@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from calendar import monthrange
 from datetime import date
 
 from models import ManagedPropertyCreate
@@ -206,6 +207,15 @@ def insert_managed_property(data: ManagedPropertyCreate) -> int:
                         data.rental.start_date.isoformat(),
                         data.rental.current_rent,
                     ),
+                )
+
+                generate_payment_periods(
+                    conn,
+                    contract_id=contract_id,
+                    start_date=data.rental.start_date,
+                    end_date=None,
+                    payment_day=data.rental.payment_day,
+                    current_rent=data.rental.current_rent,
                 )
 
             conn.commit()
@@ -870,6 +880,14 @@ def create_contract(data) -> int:
             "UPDATE properties SET status = 'occupied' WHERE id = ?",
             (data.property_id,),
         )
+        generate_payment_periods(
+            conn,
+            contract_id=contract_id,
+            start_date=data.start_date,
+            end_date=None,
+            payment_day=data.payment_day,
+            current_rent=data.current_rent,
+        )
         conn.commit()
         return contract_id
 
@@ -913,10 +931,20 @@ def update_contract(contract_id: int, data) -> bool:
 
 
 def close_contract(contract_id: int, end_date: str) -> None:
+    end_ym = end_date[:7]  # YYYY-MM
     with get_connection() as conn:
         conn.execute(
             "UPDATE contracts SET is_active = 0, end_date = ? WHERE id = ?",
             (end_date, contract_id),
+        )
+        # Remove auto-generated pending periods that fall after the contract end month.
+        # Paid and partial periods are never deleted.
+        conn.execute(
+            """
+            DELETE FROM payments
+            WHERE contract_id = ? AND period > ? AND status = 'pending'
+            """,
+            (contract_id, end_ym),
         )
         row = conn.execute(
             "SELECT property_id FROM contracts WHERE id = ?", (contract_id,)
@@ -1065,33 +1093,196 @@ def insert_payment(
     due_date: str,
     expected_amount: int,
     comment: str | None,
+    paid_amount: int | None = None,
+    paid_at: str | None = None,
+    status: str = "pending",
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO payments (contract_id, period, due_date, expected_amount, comment)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO payments
+                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (contract_id, period, due_date, expected_amount, comment),
+            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment),
         )
         conn.commit()
         return cursor.lastrowid
 
 
 def _payment_row_to_dict(row) -> dict:
+    paid = row[5]
+    expected = row[4]
+    overpayment = max(0, paid - expected) if paid is not None else 0
     return {
         "id": row[0],
         "contract_id": row[1],
         "period": row[2],
         "due_date": row[3],
-        "expected_amount": row[4],
-        "paid_amount": row[5],
+        "expected_amount": expected,
+        "paid_amount": paid,
         "paid_at": row[6],
         "status": row[7],
         "source": row[8],
         "comment": row[9],
         "created_at": row[10],
+        "overpayment": overpayment,
     }
+
+
+def generate_payment_periods(
+    conn,
+    contract_id: int,
+    start_date: date,
+    end_date: date | None,
+    payment_day: int,
+    current_rent: int,
+) -> None:
+    """Insert pending payment rows for each monthly period of the contract.
+
+    Called inside an already-open connection/transaction. Uses INSERT OR IGNORE
+    so re-running is safe if rows already exist.
+    """
+    year, month = start_date.year, start_date.month
+    end_year = end_date.year if end_date else None
+    end_month = end_date.month if end_date else None
+    generated = 0
+
+    while True:
+        if end_date is None and generated >= 12:
+            break
+        if end_date is not None and (
+            year > end_year or (year == end_year and month > end_month)
+        ):
+            break
+
+        period = f"{year}-{month:02d}"
+        last_day = monthrange(year, month)[1]
+        day = min(payment_day, last_day)
+        due_date_str = f"{year}-{month:02d}-{day:02d}"
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO payments
+                (contract_id, period, due_date, expected_amount, status, source)
+            VALUES (?, ?, ?, ?, 'pending', 'manual')
+            """,
+            (contract_id, period, due_date_str, current_rent),
+        )
+
+        generated += 1
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+
+def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
+    """Move the excess amount from an overpaid period into the next monthly period.
+
+    Returns (updated_current, updated_next) dicts.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payments WHERE id = ?", (payment_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Payment not found.")
+
+        current = _payment_row_to_dict(row)
+        if current["overpayment"] <= 0:
+            raise ValueError("No overpayment to apply.")
+
+        excess = current["overpayment"]
+        contract_id = current["contract_id"]
+
+        # Reduce current period to exactly expected_amount
+        conn.execute(
+            "UPDATE payments SET paid_amount = ?, status = 'paid' WHERE id = ?",
+            (current["expected_amount"], payment_id),
+        )
+
+        # Compute next period string
+        year = int(current["period"][:4])
+        month = int(current["period"][5:7])
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+        next_period_str = f"{year}-{month:02d}"
+
+        # Get or create the next period row
+        next_row = conn.execute(
+            "SELECT * FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, next_period_str),
+        ).fetchone()
+
+        if next_row is None:
+            # Create it using the contract's current payment_day and rent
+            contract_row = conn.execute(
+                """
+                SELECT c.payment_day, (
+                    SELECT amount FROM rent_changes
+                    WHERE contract_id = c.id
+                    ORDER BY effective_from DESC, id DESC LIMIT 1
+                ) AS current_rent
+                FROM contracts c WHERE c.id = ?
+                """,
+                (contract_id,),
+            ).fetchone()
+            if contract_row is None:
+                raise LookupError("Contract not found.")
+
+            payment_day = contract_row[0]
+            expected_amount = contract_row[1]
+            last_day = monthrange(year, month)[1]
+            day = min(payment_day, last_day)
+            due_date_str = f"{year}-{month:02d}-{day:02d}"
+
+            new_paid = excess
+            new_status = "paid" if new_paid >= expected_amount else "partial"
+
+            cursor = conn.execute(
+                """
+                INSERT INTO payments
+                    (contract_id, period, due_date, expected_amount,
+                     paid_amount, paid_at, status, source)
+                VALUES (?, ?, ?, ?, ?, date('now'), ?, 'manual')
+                """,
+                (contract_id, next_period_str, due_date_str,
+                 expected_amount, new_paid, new_status),
+            )
+            next_id = cursor.lastrowid
+        else:
+            next_dict = _payment_row_to_dict(next_row)
+            next_id = next_dict["id"]
+            expected_amount = next_dict["expected_amount"]
+            current_paid = next_dict["paid_amount"] or 0
+            new_paid = current_paid + excess
+            new_status = (
+                "paid" if new_paid >= expected_amount
+                else "partial" if new_paid > 0
+                else "pending"
+            )
+            conn.execute(
+                """
+                UPDATE payments
+                SET paid_amount = ?, paid_at = date('now'), status = ?
+                WHERE id = ?
+                """,
+                (new_paid, new_status, next_id),
+            )
+
+        conn.commit()
+
+        updated_current = _payment_row_to_dict(
+            conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
+        )
+        updated_next = _payment_row_to_dict(
+            conn.execute("SELECT * FROM payments WHERE id = ?", (next_id,)).fetchone()
+        )
+
+    return updated_current, updated_next
 
 
 def list_payments_for_contract(contract_id: int) -> list[dict]:

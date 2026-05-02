@@ -7,6 +7,24 @@ import db
 from models import AdjustmentFrequency, ManagedPropertyCreate, PropertyInfo, RentalInfo
 
 
+def _get_contract_id(property_id: int) -> int:
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE property_id = ?", (property_id,)
+        ).fetchone()
+    assert row is not None
+    return row[0]
+
+
+def _get_payments(contract_id: int) -> list[dict]:
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payments WHERE contract_id = ? ORDER BY period",
+            (contract_id,),
+        ).fetchall()
+    return [db._payment_row_to_dict(r) for r in rows]
+
+
 def _make_property(rol="00001-00001", status="occupied"):
     return PropertyInfo(
         comuna="TEST",
@@ -211,3 +229,303 @@ def test_update_syncs_display_name_with_property_label():
         ).fetchone()
 
     assert row[0] == "label actualizado"
+
+
+# ============================================================
+# Payment period generation
+# ============================================================
+
+def test_insert_managed_property_generates_12_periods():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    assert len(payments) == 12
+
+
+def test_generated_periods_start_from_contract_start_date():
+    rental = _make_rental()  # start_date = 2024-01-01
+    data = ManagedPropertyCreate(property=_make_property(), rental=rental)
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    periods = [p["period"] for p in payments]
+    assert periods[0] == "2024-01"
+    assert periods[-1] == "2024-12"
+
+
+def test_generated_periods_use_payment_day_for_due_date():
+    rental = _make_rental()  # payment_day = 5, start_date = 2024-01-01
+    data = ManagedPropertyCreate(property=_make_property(), rental=rental)
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    jan = next(p for p in payments if p["period"] == "2024-01")
+    assert jan["due_date"] == "2024-01-05"
+
+
+def test_generated_periods_clamp_due_date_for_short_months():
+    rental = RentalInfo(
+        property_label="test",
+        tenant_name="T",
+        payment_day=31,
+        current_rent=500000,
+        adjustment_frequency=AdjustmentFrequency.annual,
+        start_date=date(2024, 2, 1),
+        notice_days=0,
+        adjustment_month="february",
+    )
+    data = ManagedPropertyCreate(property=_make_property(), rental=rental)
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    feb = next(p for p in payments if p["period"] == "2024-02")
+    assert feb["due_date"] == "2024-02-29"  # 2024 is a leap year
+
+
+def test_generated_periods_status_is_pending():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    assert all(p["status"] == "pending" for p in payments)
+    assert all(p["paid_amount"] is None for p in payments)
+
+
+def test_generated_periods_expected_amount_matches_rent():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=750000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    payments = _get_payments(cid)
+    assert all(p["expected_amount"] == 750000 for p in payments)
+
+
+def test_generate_periods_with_end_date():
+    rental = RentalInfo(
+        property_label="test",
+        tenant_name="T",
+        payment_day=5,
+        current_rent=500000,
+        adjustment_frequency=AdjustmentFrequency.annual,
+        start_date=date(2024, 1, 1),
+        notice_days=0,
+        adjustment_month="january",
+    )
+    data = ManagedPropertyCreate(property=_make_property(), rental=rental)
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+
+    # Manually invoke with end_date to verify the logic
+    with db.get_connection() as conn:
+        # Clear auto-generated and re-generate with end_date
+        conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
+        db.generate_payment_periods(
+            conn,
+            contract_id=cid,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 3, 31),
+            payment_day=5,
+            current_rent=500000,
+        )
+        conn.commit()
+
+    payments = _get_payments(cid)
+    periods = [p["period"] for p in payments]
+    assert periods == ["2024-01", "2024-02", "2024-03"]
+
+
+def test_generate_periods_idempotent():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+
+    # Run again — INSERT OR IGNORE should not create duplicates
+    with db.get_connection() as conn:
+        db.generate_payment_periods(
+            conn,
+            contract_id=cid,
+            start_date=date(2024, 1, 1),
+            end_date=None,
+            payment_day=5,
+            current_rent=500000,
+        )
+        conn.commit()
+
+    payments = _get_payments(cid)
+    assert len(payments) == 12
+
+
+# ============================================================
+# Overpayment
+# ============================================================
+
+def _setup_paid_period(contract_id: int, period: str, paid_amount: int) -> int:
+    """Set paid_amount on a period (creating it if needed). Returns payment id."""
+    with db.get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT c.payment_day, (
+                SELECT amount FROM rent_changes WHERE contract_id = c.id
+                ORDER BY effective_from DESC, id DESC LIMIT 1
+            ) FROM contracts c WHERE c.id = ?
+            """,
+            (contract_id,),
+        ).fetchone()
+        payment_day, expected = row[0], row[1]
+        status = "paid" if paid_amount >= expected else "partial" if paid_amount > 0 else "pending"
+
+        existing = conn.execute(
+            "SELECT id FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, period),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                "UPDATE payments SET paid_amount = ?, paid_at = '2024-06-05', status = ? WHERE id = ?",
+                (paid_amount, status, existing[0]),
+            )
+            pid = existing[0]
+        else:
+            year, month = int(period[:4]), int(period[5:7])
+            from calendar import monthrange
+            last_day = monthrange(year, month)[1]
+            day = min(payment_day, last_day)
+            due_date = f"{year}-{month:02d}-{day:02d}"
+            cursor = conn.execute(
+                """
+                INSERT INTO payments
+                    (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, source)
+                VALUES (?, ?, ?, ?, ?, '2024-06-05', ?, 'manual')
+                """,
+                (contract_id, period, due_date, expected, paid_amount, status),
+            )
+            pid = cursor.lastrowid
+        conn.commit()
+    return pid
+
+
+def test_overpayment_computed_in_payment_row():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+
+    # Overpay 2024-01 by 100000
+    pid = _setup_paid_period(cid, "2024-01", 600000)
+    payment = db.get_payment(pid)
+    assert payment["overpayment"] == 100000
+    assert payment["status"] == "paid"
+
+
+def test_overpayment_zero_when_not_overpaid():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    pid = _setup_paid_period(cid, "2024-01", 500000)
+    payment = db.get_payment(pid)
+    assert payment["overpayment"] == 0
+
+
+def test_apply_overpayment_reduces_current_to_expected():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    pid = _setup_paid_period(cid, "2024-01", 600000)
+
+    updated_current, _ = db.apply_overpayment_to_next_period(pid)
+    assert updated_current["paid_amount"] == 500000
+    assert updated_current["overpayment"] == 0
+    assert updated_current["status"] == "paid"
+
+
+def test_apply_overpayment_moves_excess_to_next_period():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    pid = _setup_paid_period(cid, "2024-01", 600000)
+
+    _, updated_next = db.apply_overpayment_to_next_period(pid)
+    assert updated_next["period"] == "2024-02"
+    assert updated_next["paid_amount"] == 100000
+    assert updated_next["status"] == "partial"
+
+
+def test_apply_overpayment_adds_to_existing_next_period():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+
+    pid_jan = _setup_paid_period(cid, "2024-01", 600000)
+
+    # Pre-seed 2024-02 with some payment already
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE payments SET paid_amount = 200000, status = 'partial' WHERE contract_id = ? AND period = '2024-02'",
+            (cid,),
+        )
+        conn.commit()
+
+    _, updated_next = db.apply_overpayment_to_next_period(pid_jan)
+    assert updated_next["period"] == "2024-02"
+    # 200000 existing + 100000 excess = 300000
+    assert updated_next["paid_amount"] == 300000
+    assert updated_next["status"] == "partial"
+
+
+def test_apply_overpayment_raises_when_no_overpayment():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental(rent=500000))
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    pid = _setup_paid_period(cid, "2024-01", 500000)
+
+    with pytest.raises(ValueError, match="No overpayment"):
+        db.apply_overpayment_to_next_period(pid)
+
+
+# ============================================================
+# close_contract pruning
+# ============================================================
+
+def test_close_contract_removes_future_pending_periods():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+    # start_date 2024-01-01 → periods 2024-01 to 2024-12
+
+    # Mark 2024-03 as paid
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE payments SET paid_amount = 500000, status = 'paid' WHERE contract_id = ? AND period = '2024-03'",
+            (cid,),
+        )
+        conn.commit()
+
+    # Close with end_date 2024-03-31 → remove pending periods > 2024-03
+    db.close_contract(cid, "2024-03-31")
+
+    payments = _get_payments(cid)
+    remaining_periods = {p["period"] for p in payments}
+
+    assert "2024-04" not in remaining_periods
+    assert "2024-12" not in remaining_periods
+    assert "2024-03" in remaining_periods  # paid — kept
+    assert "2024-01" in remaining_periods  # pending but within range — kept
+    assert "2024-02" in remaining_periods
+
+
+def test_close_contract_keeps_all_paid_periods():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    property_id = db.insert_managed_property(data)
+    cid = _get_contract_id(property_id)
+
+    # Pay all 12 periods
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE payments SET paid_amount = 500000, status = 'paid' WHERE contract_id = ?",
+            (cid,),
+        )
+        conn.commit()
+
+    db.close_contract(cid, "2024-12-31")
+
+    payments = _get_payments(cid)
+    assert len(payments) == 12

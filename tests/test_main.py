@@ -711,7 +711,7 @@ def test_dashboard_current_payment_status_paid():
 
 
 def test_dashboard_payment_status_missing_period():
-    """Sin períodos creados → payment_status = missing_period, period_amount = None."""
+    """Contrato con start_date futuro → sin períodos exigibles → missing_period."""
     payload = {
         "property": {
             "comuna": "VALDIVIA",
@@ -730,7 +730,7 @@ def test_dashboard_payment_status_missing_period():
             "property_label": "depto missing period",
             "current_rent": 500000,
             "adjustment_frequency": "annual",
-            "start_date": "2023-01-01",
+            "start_date": "2028-01-01",
             "notice_days": 60,
             "adjustment_month": "january",
         },
@@ -793,8 +793,14 @@ def test_dashboard_payment_status_outstanding_balance():
 
 
 def test_dashboard_payment_status_paid_up():
-    """Período exigible completamente pagado → paid_up."""
+    """Período exigible completamente pagado → paid_up.
+
+    Usa start_date en el mes actual para que solo haya 1 período exigible
+    y el saldo pendiente sea 0 al pagarlo.
+    """
     current_period = datetime.date.today().strftime("%Y-%m")
+    start_of_month = datetime.date.today().replace(day=1).isoformat()
+
     payload = {
         "property": {
             "comuna": "VALDIVIA",
@@ -813,7 +819,7 @@ def test_dashboard_payment_status_paid_up():
             "property_label": "depto paid up",
             "current_rent": 700000,
             "adjustment_frequency": "annual",
-            "start_date": "2023-01-01",
+            "start_date": start_of_month,
             "notice_days": 60,
             "adjustment_month": "january",
         },
@@ -823,13 +829,21 @@ def test_dashboard_payment_status_paid_up():
 
     contracts = client.get("/contracts").json()
     contract = next(c for c in contracts if c["rol"] == "09009-00001")
-    create_resp = client.post(
-        f"/contracts/{contract['id']}/payments",
-        json={"period": current_period},
-    )
-    assert create_resp.status_code == 200
-    payment_id    = create_resp.json()["id"]
-    expected      = create_resp.json()["expected_amount"]
+
+    # The current period is auto-generated; find it from the payments list.
+    payments = client.get(f"/contracts/{contract['id']}/payments").json()
+    current_p = next((p for p in payments if p["period"] == current_period), None)
+    if current_p:
+        payment_id = current_p["id"]
+        expected = current_p["expected_amount"]
+    else:
+        create_resp = client.post(
+            f"/contracts/{contract['id']}/payments",
+            json={"period": current_period},
+        )
+        assert create_resp.status_code == 200
+        payment_id = create_resp.json()["id"]
+        expected = create_resp.json()["expected_amount"]
 
     patch_resp = client.patch(f"/payments/{payment_id}", json={"paid_amount": expected})
     assert patch_resp.status_code == 200
@@ -1419,3 +1433,166 @@ def test_delete_rent_change_intermediate_returns_409():
 def test_delete_rent_change_not_found_returns_404():
     r = client.delete("/rent-changes/99999")
     assert r.status_code == 404
+
+
+# ============================================================
+# FASE 5: Payment period generation
+# ============================================================
+
+def test_contract_creation_generates_12_periods():
+    _, _, contract_id = _setup_contract_scenario()
+    payments = client.get(f"/contracts/{contract_id}/payments").json()
+    assert len(payments) == 12
+
+
+def test_generated_periods_use_payment_day_for_due_date():
+    # _setup_contract_scenario uses payment_day=5 and start_date=2024-01-01
+    _, _, contract_id = _setup_contract_scenario()
+    payments = client.get(f"/contracts/{contract_id}/payments").json()
+    jan = next(p for p in payments if p["period"] == "2024-01")
+    assert jan["due_date"] == "2024-01-05"
+
+
+def test_generated_periods_are_pending_with_no_paid_amount():
+    _, _, contract_id = _setup_contract_scenario()
+    payments = client.get(f"/contracts/{contract_id}/payments").json()
+    assert all(p["status"] == "pending" for p in payments)
+    assert all(p["paid_amount"] is None for p in payments)
+
+
+def test_managed_property_creation_also_generates_periods():
+    r = client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "IQUIQUE",
+                "rol": "11001-00001",
+                "address": "Arturo Prat 100",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": "11",
+                "property_number": "11",
+                "year": 2021,
+                "fiscal_appraisal": 60000000,
+            },
+            "rental": {
+                "tenant_name": "Arrendatario Iquique",
+                "payment_day": 5,
+                "property_label": "depto iquique",
+                "current_rent": 450000,
+                "adjustment_frequency": "annual",
+                "start_date": "2024-06-01",
+                "notice_days": 30,
+                "adjustment_month": "june",
+            },
+        },
+    )
+    assert r.status_code == 200
+    cid = _get_contract_id_for_rol("11001-00001")
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    assert len(payments) == 12
+    periods = [p["period"] for p in payments]
+    assert "2024-06" in periods
+    assert "2025-05" in periods
+
+
+def test_overpayment_field_is_returned_in_payment_response():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-01"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": 600000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert "overpayment" in body
+    assert body["overpayment"] == 100000
+
+
+def test_overpayment_zero_when_exactly_paid():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-02"})
+    pid = r.json()["id"]
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": 500000})
+    assert r.json()["overpayment"] == 0
+
+
+def test_apply_overpayment_endpoint_moves_excess_to_next():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-03"})
+    pid = r.json()["id"]
+    client.patch(f"/payments/{pid}", json={"paid_amount": 600000})
+
+    r = client.post(f"/payments/{pid}/apply-overpayment")
+    assert r.status_code == 200
+    body = r.json()
+
+    assert body["current"]["paid_amount"] == 500000
+    assert body["current"]["overpayment"] == 0
+    assert body["current"]["status"] == "paid"
+
+    assert body["next"]["period"] == "2026-04"
+    assert body["next"]["paid_amount"] == 100000
+    assert body["next"]["status"] == "partial"
+
+
+def test_apply_overpayment_returns_400_when_none():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-05"})
+    pid = r.json()["id"]
+    client.patch(f"/payments/{pid}", json={"paid_amount": 500000})
+
+    r = client.post(f"/payments/{pid}/apply-overpayment")
+    assert r.status_code == 400
+
+
+def test_close_contract_removes_future_pending_periods():
+    _, _, contract_id = _setup_contract_scenario()
+    # contract has 12 periods: 2024-01 to 2024-12
+
+    # Pay 2024-06
+    payments = client.get(f"/contracts/{contract_id}/payments").json()
+    p = next(p for p in payments if p["period"] == "2024-06")
+    client.patch(f"/payments/{p['id']}", json={"paid_amount": 700000})
+
+    # Close with end_date 2024-06-30
+    r = client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-06-30"})
+    assert r.status_code == 200
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect("test_rental_manager.db")
+    rows = conn.execute(
+        "SELECT period, status FROM payments WHERE contract_id = ? ORDER BY period",
+        (contract_id,),
+    ).fetchall()
+    conn.close()
+
+    remaining = {row[0]: row[1] for row in rows}
+    assert "2024-07" not in remaining
+    assert "2024-12" not in remaining
+    assert "2024-06" in remaining  # paid — kept
+    assert "2024-01" in remaining  # pending within range — kept
+    assert "2024-05" in remaining
+
+
+def test_create_payment_with_paid_amount_derives_status():
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2026-06", "paid_amount": 250000, "paid_at": "2026-06-05"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    assert body["paid_amount"] == 250000
+
+
+def test_create_payment_with_full_amount_marks_paid():
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2026-07", "paid_amount": 500000, "paid_at": "2026-07-05"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "paid"

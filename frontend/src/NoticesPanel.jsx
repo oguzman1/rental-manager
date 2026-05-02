@@ -1,5 +1,5 @@
 import { PaymentStateBadge } from './Badge'
-import { formatCLP, daysUntil, formatRentPeriod } from './utils'
+import { formatCLP, daysUntil, formatRentPeriod, formatPaymentDueTiming } from './utils'
 
 function formatNoticeTiming(isoDate) {
   if (!isoDate) return null
@@ -75,8 +75,9 @@ function PaymentCard({ item, onClick }) {
     ? formatCLP(amount) + (item.paymentState === 'partial' ? ' esperado' : '')
     : null
 
-  const title = formatRentPeriod(item.actionable_payment_period)
-  const meta  = [item.property_label ?? item.rol, amountText].filter(Boolean).join(' · ')
+  const title      = formatRentPeriod(item.actionable_payment_period)
+  const meta       = [item.property_label ?? item.rol, amountText].filter(Boolean).join(' · ')
+  const dueTiming  = formatPaymentDueTiming(item.actionable_payment_period, item.payment_day)
 
   return (
     <div
@@ -90,6 +91,7 @@ function PaymentCard({ item, onClick }) {
         <span className="notice-card-name">{title}</span>
         <PaymentStateBadge state={item.paymentState} />
       </div>
+      {dueTiming && <div className="notice-card-date">{dueTiming}</div>}
       <div className="notice-card-tenant">{meta}</div>
       {item.tenant_name && (
         <div className="notice-card-tenant">{item.tenant_name}</div>

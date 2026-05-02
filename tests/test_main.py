@@ -2012,3 +2012,241 @@ def test_dashboard_requires_notice_false_after_adjustment():
     assert item2["requires_adjustment_notice"] is False, (
         "dashboard must clear the alert after a rent change within the notice window"
     )
+
+
+# ============================================================
+# GAP DETECTION — feature/payments-period-gap-detection
+# ============================================================
+
+# --- Date helpers for relative date construction ---
+
+def _ym_add(ym: str, delta: int) -> str:
+    """Shift a 'YYYY-MM' string by delta months."""
+    total = int(ym[:4]) * 12 + int(ym[5:7]) - 1 + delta
+    return f"{total // 12}-{total % 12 + 1:02d}"
+
+
+def _ym_for_months_ago(n: int) -> str:
+    """Return 'YYYY-MM' for the month n months before today (negative n = future)."""
+    today = datetime.date.today()
+    total = today.year * 12 + today.month - 1 - n
+    return f"{total // 12}-{total % 12 + 1:02d}"
+
+
+def _first_day_for_months_ago(n: int) -> str:
+    """Return 'YYYY-MM-01' for the month n months before today (negative n = future)."""
+    return f"{_ym_for_months_ago(n)}-01"
+
+
+def _setup_gap_contract(rol: str, start_date: str | None = None) -> int:
+    """Create a gap-test contract.
+
+    Default start_date is the first day of 13 months ago so that
+    generate_payment_periods produces exactly 12 rows covering
+    [13_months_ago, 2_months_ago], leaving 1_month_ago onward with no rows.
+    """
+    if start_date is None:
+        start_date = _first_day_for_months_ago(13)
+    r = client.post("/managed-property", json={
+        "property": {
+            "comuna": "GAP TESTS",
+            "rol": rol,
+            "address": f"Gap Test {rol}",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "1",
+            "property_number": "1",
+            "year": 2024,
+            "fiscal_appraisal": 100000000,
+        },
+        "rental": {
+            "tenant_name": "Arrendatario Gap",
+            "payment_day": 5,
+            "property_label": f"prop {rol}",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": start_date,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    })
+    assert r.status_code == 200
+    return _get_contract_id_for_rol(rol)
+
+
+def test_gap_detection_middle_period():
+    """Middle gap: virtual period earlier than the SQL actionable period.
+
+    State: start_ym paid, start_ym+1 deleted, rest pending.
+    SQL actionable = start_ym+2 (earliest unpaid existing row).
+    Virtual gap    = start_ym+1 (first missing in sequence from start).
+    min(start_ym+1, start_ym+2) → virtual wins.
+    """
+    cid = _setup_gap_contract("12001-00001")
+    start_ym = _ym_for_months_ago(13)
+    gap_ym = _ym_add(start_ym, 1)
+    payments = client.get(f"/contracts/{cid}/payments").json()
+
+    p_start = next(p for p in payments if p["period"] == start_ym)
+    client.patch(f"/payments/{p_start['id']}", json={"paid_amount": p_start["expected_amount"]})
+
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("DELETE FROM payments WHERE contract_id = ? AND period = ?", (cid, gap_ym))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12001-00001")
+    assert item["actionable_payment_period"] == gap_ym
+    assert item["actionable_payment_status"] == "pending"
+
+
+def test_gap_detection_before_first_existing_row():
+    """Gap at start: start_ym itself is missing but later rows exist.
+
+    State: start_ym deleted, rest pending.
+    SQL actionable = start_ym+1 (earliest unpaid existing row).
+    Virtual gap    = start_ym (start_ym is the first missing month).
+    min(start_ym, start_ym+1) → virtual wins.
+    """
+    cid = _setup_gap_contract("12002-00001")
+    start_ym = _ym_for_months_ago(13)
+
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("DELETE FROM payments WHERE contract_id = ? AND period = ?", (cid, start_ym))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12002-00001")
+    assert item["actionable_payment_period"] == start_ym
+    assert item["actionable_payment_status"] == "pending"
+
+
+def test_gap_detection_after_latest_paid_rows():
+    """Gap after last existing row: all generated rows paid, later months missing.
+
+    Contract starts 13 months ago; 12 rows generated covering [start_ym, start_ym+11].
+    After paying all 12, virtual gap = start_ym+12 (first uncovered month).
+    """
+    cid = _setup_gap_contract("12003-00001")
+    payments = client.get(f"/contracts/{cid}/payments").json()
+
+    for p in payments:
+        client.patch(f"/payments/{p['id']}", json={"paid_amount": p["expected_amount"]})
+
+    expected_gap = _ym_for_months_ago(1)  # start_ym + 12 = 13 months ago + 12 = 1 month ago
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12003-00001")
+    assert item["actionable_payment_period"] == expected_gap
+    assert item["actionable_payment_status"] == "pending"
+    assert item["actionable_payment_amount"] == 500000
+
+
+def test_gap_detection_no_rows_at_all():
+    """No rows at all: virtual period = start_ym.
+
+    Simulates a contract seeded directly into the DB without generating
+    payment rows — the dashboard must still surface the first due period.
+    """
+    cid = _setup_gap_contract("12004-00001")
+    start_ym = _ym_for_months_ago(13)
+
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12004-00001")
+    assert item["actionable_payment_period"] == start_ym
+    assert item["actionable_payment_status"] == "pending"
+    assert item["actionable_payment_amount"] == 500000
+
+
+def test_gap_detection_future_start_date_no_alert():
+    """Future start_date: start_ym > current_ym — no virtual gap must be surfaced."""
+    future_start = _first_day_for_months_ago(-1)  # next month
+    _setup_gap_contract("12005-00001", start_date=future_start)
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12005-00001")
+    assert item["actionable_payment_period"] is None
+
+
+def test_gap_detection_vacant_property_no_alert():
+    """Vacant property has no contract: gap detection must not apply."""
+    client.post("/managed-property", json={
+        "property": {
+            "comuna": "GAP TESTS",
+            "rol": "12006-00001",
+            "address": "Gap Vacant Test",
+            "destination": "SITIO ERIAZO",
+            "status": "vacant",
+            "fojas": "1",
+            "property_number": "1",
+            "year": 2024,
+            "fiscal_appraisal": 100000000,
+        },
+        "rental": None,
+    })
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12006-00001")
+    assert item["contract_id"] is None
+    assert item["actionable_payment_period"] is None
+
+
+def test_gap_detection_sql_period_preserved_when_earlier_than_virtual():
+    """SQL actionable period preserved when it is earlier than the virtual gap.
+
+    State: start_ym pending (exists), start_ym+1 deleted, rest pending.
+    SQL actionable = start_ym (earliest unpaid existing row).
+    Virtual gap    = start_ym+1 (first missing).
+    start_ym < start_ym+1 → virtual is NOT earlier → SQL is kept.
+    """
+    cid = _setup_gap_contract("12007-00001")
+    start_ym = _ym_for_months_ago(13)
+    gap_ym = _ym_add(start_ym, 1)
+
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute("DELETE FROM payments WHERE contract_id = ? AND period = ?", (cid, gap_ym))
+    conn.commit()
+    conn.close()
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12007-00001")
+    assert item["actionable_payment_period"] == start_ym
+    assert item["actionable_payment_status"] == "pending"
+
+
+def test_gap_detection_no_false_positive_when_all_due_paid():
+    """No false positive: all due rows through current month are paid → actionable = None.
+
+    Contract starts in the current month so generate_payment_periods creates
+    exactly one due row (current month).  After fully paying it the virtual
+    scan finds the period in the existing set and returns None — no spurious
+    alert must be raised.
+    """
+    today = datetime.date.today()
+    current_ym = today.strftime("%Y-%m")
+    start_date = f"{current_ym}-01"
+
+    cid = _setup_gap_contract("12008-00001", start_date=start_date)
+    payments = client.get(f"/contracts/{cid}/payments").json()
+
+    due = [p for p in payments if p["period"] <= current_ym]
+    for p in due:
+        r = client.patch(f"/payments/{p['id']}", json={"paid_amount": p["expected_amount"]})
+        assert r.status_code == 200
+
+    item = next(i for i in client.get("/dashboard").json() if i["rol"] == "12008-00001")
+    assert item["actionable_payment_period"] is None, (
+        "gap detection must not invent an alert when all due periods exist and are paid"
+    )
+
+
+# Frontend targetPeriod no-rows path — verified by code inspection.
+# PaymentsView.jsx openAdd(): the payments.length === 0 branch previously called
+# setFormCustomPeriod(todayLocal().slice(0, 7)), which ignored targetPeriod.
+# The fix changes it to: setFormCustomPeriod(targetPeriod ?? todayLocal().slice(0, 7))
+# This ensures that when the dashboard surfaces a virtual gap for a contract with
+# no rows and the user clicks Resolve, the add-payment form pre-selects the
+# correct period instead of today's month.
+# No frontend test framework exists in this project; this scenario is covered by
+# the backend tests above (gap surfaced → actionable_payment_period populated)
+# and manual inspection of the PaymentsView change.

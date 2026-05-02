@@ -942,6 +942,18 @@
   font-family: var(--font-mono);
 }
 
+.overpayment-confirm-text {
+  font-size: 12px;
+  color: var(--ink);
+  font-family: var(--font-ui);
+}
+
+.payment-overpayment-confirm-text {
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
 .btn-warn-sm {
   font-size: 12px;
   padding: 3px 10px;

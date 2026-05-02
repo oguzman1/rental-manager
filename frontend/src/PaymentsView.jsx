@@ -110,6 +110,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   // Overpayment
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
   const [overpaymentError, setOverpaymentError] = useState(null)
+  const [pendingOverpaymentId, setPendingOverpaymentId] = useState(null)
+  // Pre-save overpayment draft: set when handleAdd detects excess before submitting
+  const [pendingOverpaymentDraft, setPendingOverpaymentDraft] = useState(null)
 
   async function loadPayments() {
     try {
@@ -233,10 +236,19 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     e.preventDefault()
     setIsSubmitting(true)
     setFormError(null)
+    setOverpaymentError(null)
     const period = formUseCustom ? formCustomPeriod : formPeriod
     const amount = parseAmountInput(formAmount)
+    const existing = payments.find(p => p.period === period)
+    const expectedAmount = existing ? existing.expected_amount : (contract.current_rent ?? 0)
+    const alreadyPaid = existing ? (existing.paid_amount ?? 0) : 0
+    const overpaymentAmount = Math.max(0, alreadyPaid + amount - expectedAmount)
+    if (overpaymentAmount > 0) {
+      setPendingOverpaymentDraft({ period, amount, formDate, formNote, overpaymentAmount, expectedAmount, existingPayment: existing ?? null })
+      setIsSubmitting(false)
+      return
+    }
     try {
-      const existing = payments.find(p => p.period === period)
       if (existing) {
         const res = await fetch(`${API_BASE}/payments/${existing.id}`, {
           method: 'PATCH',
@@ -313,6 +325,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   }
 
   async function handleApplyOverpayment(payment) {
+    setPendingOverpaymentId(null)
     setApplyingOverpayment(prev => new Set([...prev, payment.id]))
     setOverpaymentError(null)
     try {
@@ -330,6 +343,62 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         next.delete(payment.id)
         return next
       })
+    }
+  }
+
+  async function handleConfirmOverpayment() {
+    if (!pendingOverpaymentDraft) return
+    const { period, amount, formDate, formNote, existingPayment } = pendingOverpaymentDraft
+    setIsSubmitting(true)
+    setFormError(null)
+    setOverpaymentError(null)
+    try {
+      let paymentId
+      if (existingPayment) {
+        const res = await fetch(`${API_BASE}/payments/${existingPayment.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paid_amount: (existingPayment.paid_amount ?? 0) + amount,
+            paid_at: formDate,
+            ...(formNote ? { comment: formNote } : {}),
+          }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+        paymentId = existingPayment.id
+      } else {
+        const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            period,
+            paid_amount: amount || null,
+            paid_at: formDate || null,
+            comment: formNote || null,
+          }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+        const data = await res.json()
+        paymentId = data.id
+      }
+      const applyRes = await fetch(`${API_BASE}/payments/${paymentId}/apply-overpayment`, { method: 'POST' })
+      if (!applyRes.ok) {
+        // Payment already persisted — do not retry. Reload and show row-level error.
+        setPendingOverpaymentDraft(null)
+        setActiveForm(null)
+        await loadPayments()
+        await onPaymentMutation?.()
+        setOverpaymentError('El pago se guardó, pero no se pudo abonar el sobrepago. Intenta nuevamente desde la fila.')
+        return
+      }
+      setPendingOverpaymentDraft(null)
+      setActiveForm(null)
+      await loadPayments()
+      await onPaymentMutation?.()
+    } catch (err) {
+      setFormError(err.message)
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -355,8 +424,26 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           <span>Día de pago: {contract.payment_day}</span>
         </div>
 
+        {/* Pre-save overpayment confirmation */}
+        {pendingOverpaymentDraft && (
+          <div className="payment-form">
+            <p className="payment-overpayment-confirm-text">
+              El monto ingresado ({formatCLP(pendingOverpaymentDraft.amount)}) supera lo esperado ({formatCLP(pendingOverpaymentDraft.expectedAmount)}) en {formatCLP(pendingOverpaymentDraft.overpaymentAmount)}. ¿Guardar el pago y abonar el sobrepago al próximo período?
+            </p>
+            <div className="payment-form-actions">
+              <button className="btn-primary" onClick={handleConfirmOverpayment} disabled={isSubmitting}>
+                {isSubmitting ? 'Guardando…' : 'Confirmar'}
+              </button>
+              <button className="btn-secondary" type="button" onClick={() => { setPendingOverpaymentDraft(null); setFormError(null) }}>
+                Cancelar
+              </button>
+            </div>
+            {formError && <div className="payment-form-error">{formError}</div>}
+          </div>
+        )}
+
         {/* Agregar pago form */}
-        {activeForm === 'add' && (
+        {activeForm === 'add' && !pendingOverpaymentDraft && (
           <form className="payment-form" onSubmit={handleAdd}>
             <div className="payment-form-row">
               {!formUseCustom ? (
@@ -586,15 +673,34 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                             <span className="overpayment-label">
                               Sobrepago: {formatCLP(p.overpayment)}
                             </span>
-                            <button
-                              className="btn-warn-sm"
-                              onClick={() => handleApplyOverpayment(p)}
-                              disabled={applyingOverpayment.has(p.id)}
-                            >
-                              {applyingOverpayment.has(p.id)
-                                ? 'Aplicando…'
-                                : 'Abonar al próximo periodo'}
-                            </button>
+                            {pendingOverpaymentId === p.id ? (
+                              <>
+                                <span className="overpayment-confirm-text">
+                                  ¿Abonar este sobrepago al próximo período?
+                                </span>
+                                <button
+                                  className="btn-warn-sm"
+                                  onClick={() => handleApplyOverpayment(p)}
+                                  disabled={applyingOverpayment.has(p.id)}
+                                >
+                                  {applyingOverpayment.has(p.id) ? 'Aplicando…' : 'Confirmar'}
+                                </button>
+                                <button
+                                  className="btn-warn-sm"
+                                  onClick={() => setPendingOverpaymentId(null)}
+                                >
+                                  Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                className="btn-warn-sm"
+                                onClick={() => setPendingOverpaymentId(p.id)}
+                                disabled={applyingOverpayment.has(p.id)}
+                              >
+                                {applyingOverpayment.has(p.id) ? 'Aplicando…' : 'Abonar al próximo periodo'}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       )}

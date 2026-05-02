@@ -1,7 +1,15 @@
 import { StatusBadge, PaymentBadge } from './Badge'
-import { formatCLP, formatPeriod, contractDuration } from './utils'
+import { formatCLP, formatPeriod, contractDuration, formatNextAdjustment, formatRentSince } from './utils'
 
 function DashboardRow({ property, onClick }) {
+  const since = formatRentSince(property.start_date, property.last_adjustment_date)
+  const estadoSubtitle =
+    property.status === 'vacant'
+      ? 'Sin arriendo activo'
+      : property.current_rent != null
+        ? (since ? `${formatCLP(property.current_rent)} desde ${since}` : `${formatCLP(property.current_rent)}`)
+        : null
+
   return (
     <tr className="table-row" onClick={onClick}>
       <td className="td">
@@ -16,19 +24,17 @@ function DashboardRow({ property, onClick }) {
       </td>
       <td className="td">
         <StatusBadge status={property.status} />
-        {property.period_amount != null && (
-          <div className="td-sub">{`Canon: ${formatCLP(property.period_amount)}`}</div>
-        )}
+        {estadoSubtitle && <div className="td-sub">{estadoSubtitle}</div>}
       </td>
       <td className="td">
         <PaymentBadge status={property.payment_status} />
         <div className="td-sub">{formatPeriod(property.latest_period)}</div>
       </td>
       <td className="td td-mono td-muted">
-        <div>{property.next_adjustment_date ?? <span className="text-muted">—</span>}</div>
+        <div>{formatNextAdjustment(property.next_adjustment_date) ?? <span className="text-muted">—</span>}</div>
         {property.start_date && (
           <div className="td-sub">
-            {property.last_adjustment_date ? `Últ: ${property.last_adjustment_date}` : 'Sin reajuste'}
+            {property.last_adjustment_date ? `Últ: ${property.last_adjustment_date}` : 'Últ: Sin reajuste'}
           </div>
         )}
       </td>

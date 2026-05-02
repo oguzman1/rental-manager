@@ -158,7 +158,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     if (payments.length === 0) {
       setFormPeriod('')
       setFormUseCustom(true)
-      setFormCustomPeriod(todayLocal().slice(0, 7))
+      setFormCustomPeriod(targetPeriod ?? todayLocal().slice(0, 7))
       setFormAmount(contract.current_rent != null ? formatAmountInput(contract.current_rent) : '')
       setFormDate(todayLocal())
       setFormNote('')

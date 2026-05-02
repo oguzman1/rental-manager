@@ -630,7 +630,28 @@ def delete_rent_change(rent_change_id: int) -> None:
         conn.commit()
 
 
+def _iter_months(start_ym: str, end_ym: str):
+    """Yield 'YYYY-MM' strings from start_ym to end_ym inclusive."""
+    y, m = int(start_ym[:4]), int(start_ym[5:7])
+    ey, em = int(end_ym[:4]), int(end_ym[5:7])
+    while (y, m) <= (ey, em):
+        yield f"{y}-{m:02d}"
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+
+def _first_missing_period(start_ym: str, cap_ym: str, existing: set) -> str | None:
+    """Return the earliest month in [start_ym, cap_ym] not present in existing, or None."""
+    for ym in _iter_months(start_ym, cap_ym):
+        if ym not in existing:
+            return ym
+    return None
+
+
 def list_dashboard_items() -> list[dict]:
+    today_ym = date.today().strftime("%Y-%m")
+
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -646,6 +667,7 @@ def list_dashboard_items() -> list[dict]:
                 rc.amount               AS current_rent,
                 c.adjustment_frequency,
                 c.start_date,
+                c.end_date,
                 {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
                 cp.status               AS current_payment_status,
                 ps.total_exigibles,
@@ -722,6 +744,20 @@ def list_dashboard_items() -> list[dict]:
             """
         ).fetchall()
 
+        # Batch query: all existing periods per active contract up to current month.
+        # Runs inside the same connection to avoid a second open/close cycle.
+        contract_ids = [row["contract_id"] for row in rows if row["contract_id"] is not None]
+        existing_periods_by_contract: dict[int, set[str]] = {}
+        if contract_ids:
+            placeholders = ",".join("?" * len(contract_ids))
+            period_rows = conn.execute(
+                f"SELECT contract_id, period FROM payments "
+                f"WHERE contract_id IN ({placeholders}) AND period <= ?",
+                (*contract_ids, today_ym),
+            ).fetchall()
+            for pr in period_rows:
+                existing_periods_by_contract.setdefault(pr[0], set()).add(pr[1])
+
     result = []
     for row in rows:
         total_exigibles = row["total_exigibles"]
@@ -734,6 +770,30 @@ def list_dashboard_items() -> list[dict]:
         else:
             payment_status = "outstanding_balance"
 
+        actionable_period = row["actionable_payment_period"]
+        actionable_status = row["actionable_payment_status"]
+        actionable_amount = row["actionable_payment_amount"]
+
+        contract_id     = row["contract_id"]
+        start_date_str  = row["start_date"]
+        end_date_str    = row["end_date"]
+        current_rent    = row["current_rent"]
+
+        if contract_id is not None and start_date_str is not None:
+            start_ym = start_date_str[:7]
+            cap_ym   = min(today_ym, end_date_str[:7]) if end_date_str else today_ym
+
+            if start_ym <= cap_ym:
+                existing = existing_periods_by_contract.get(contract_id, set())
+                virtual_period = _first_missing_period(start_ym, cap_ym, existing)
+
+                if virtual_period is not None and (
+                    actionable_period is None or virtual_period < actionable_period
+                ):
+                    actionable_period = virtual_period
+                    actionable_status = "pending"
+                    actionable_amount = current_rent
+
         result.append({
             "id":                     row["id"],
             "rol":                    row["rol"],
@@ -742,18 +802,18 @@ def list_dashboard_items() -> list[dict]:
             "property_label":         row["property_label"],
             "tenant_name":            row["tenant_name"],
             "payment_day":            row["payment_day"],
-            "current_rent":           row["current_rent"],
+            "current_rent":           current_rent,
             "adjustment_frequency":   row["adjustment_frequency"],
-            "start_date":             row["start_date"],
+            "start_date":             start_date_str,
             "last_adjustment_date":   row["last_adjustment_date"],
             "current_payment_status": row["current_payment_status"],
             "payment_status":         payment_status,
             "period_amount":              row["period_amount"],
             "latest_period":              row["latest_period"],
-            "actionable_payment_period":  row["actionable_payment_period"],
-            "actionable_payment_status":  row["actionable_payment_status"],
-            "actionable_payment_amount":  row["actionable_payment_amount"],
-            "contract_id":                row["contract_id"],
+            "actionable_payment_period":  actionable_period,
+            "actionable_payment_status":  actionable_status,
+            "actionable_payment_amount":  actionable_amount,
+            "contract_id":                contract_id,
         })
     return result
 

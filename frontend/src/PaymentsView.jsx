@@ -1,21 +1,11 @@
 import { Fragment, useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { PaymentBadge } from './Badge'
-import { formatCLP } from './utils'
+import { formatCLP, formatPeriodLabel } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
-const MONTHS_ES = [
-  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
-  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
-]
-
 const STATUS_ES = { pending: 'Pendiente', partial: 'Parcial', paid: 'Pagado' }
-
-function formatPeriodLabel(period) {
-  const [year, month] = period.split('-')
-  return `${MONTHS_ES[parseInt(month, 10) - 1]} ${year}`
-}
 
 function todayLocal() {
   const now = new Date()
@@ -640,7 +630,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   {visiblePayments.map(p => (
                     <Fragment key={p.id}>
                       <tr className="table-row-static">
-                        <td className="td td-mono">{p.period}</td>
+                        <td className="td td-mono">{formatPeriodLabel(p.period)}</td>
                         <td className="td td-mono td-muted">{p.due_date}</td>
                         <td className="td td-right td-mono">{formatCLP(p.expected_amount)}</td>
                         <td className="td td-right td-mono">

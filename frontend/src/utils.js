@@ -95,6 +95,28 @@ export function formatNextAdjustment(isoDate) {
   return `En ${monthStr} y ${dayStr}`
 }
 
+export function formatPaymentDueTiming(period, paymentDay) {
+  if (!period) return null
+  const dueDay = Number(paymentDay)
+  if (!Number.isFinite(dueDay) || dueDay <= 0) return null
+  const [yearStr, monthStr] = period.split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  if (!year || !month || month < 1 || month > 12) return null
+  const lastDay = new Date(year, month, 0).getDate()
+  const clampedDay = Math.min(Math.floor(dueDay), lastDay)
+  const dueDate = new Date(year, month - 1, clampedDay)
+  const today = new Date()
+  dueDate.setHours(0, 0, 0, 0)
+  today.setHours(0, 0, 0, 0)
+  const days = Math.round((dueDate - today) / (1000 * 60 * 60 * 24))
+  if (days === 0) return 'Vence hoy'
+  if (days === 1) return 'Vence mañana'
+  if (days > 1) return `Vence en ${days} días`
+  if (days === -1) return 'Vencido hace 1 día'
+  return `Vencido hace ${Math.abs(days)} días`
+}
+
 export function formatRentSince(startDate, lastAdjDate) {
   const raw = lastAdjDate ?? startDate
   if (!raw) return null

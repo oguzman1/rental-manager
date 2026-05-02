@@ -18,24 +18,35 @@ const API_URL = 'http://127.0.0.1:8000/dashboard'
 
 function computePendingItems(properties) {
   const todayDay = new Date().getDate()
+  const now = new Date()
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
   return properties
-    .filter((p) => p.status === 'occupied' && p.current_payment_status !== 'paid')
+    .filter((p) => p.status === 'occupied' && p.actionable_payment_period != null)
     .map((p) => {
       let paymentState
-      if (p.current_payment_status === 'partial') {
+      if (p.actionable_payment_status === 'partial') {
         paymentState = 'partial'
+      } else if (p.actionable_payment_period != null && p.actionable_payment_period < currentMonth) {
+        paymentState = 'overdue'
       } else {
-        // pending or null: check if past the payment day
-        paymentState = p.payment_day != null && todayDay > p.payment_day
-          ? 'overdue'
-          : 'pending'
+        paymentState = p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending'
       }
       return { ...p, paymentState }
     })
     .sort((a, b) => {
       const order = { overdue: 0, partial: 1, pending: 2 }
       return order[a.paymentState] - order[b.paymentState]
+    })
+}
+
+function computeAdjustmentAlerts(properties) {
+  return properties
+    .filter((p) => p.requires_adjustment_notice === true)
+    .sort((a, b) => {
+      if (!a.next_adjustment_date) return 1
+      if (!b.next_adjustment_date) return -1
+      return a.next_adjustment_date.localeCompare(b.next_adjustment_date)
     })
 }
 
@@ -105,8 +116,26 @@ function App() {
         current_rent:   property.current_rent,
         payment_day:    property.payment_day,
       },
-      targetPeriod: property.latest_period ?? null,
+      targetPeriod: property.actionable_payment_period ?? null,
       from: 'dashboard',
+    })
+  }
+
+  function handleNoticeAdjustmentClick(property) {
+    setRoute({
+      name: 'rent-changes',
+      contract: {
+        contract_id:          property.contract_id,
+        property_label:       property.property_label,
+        rol:                  property.rol,
+        tenant_name:          property.tenant_name,
+        current_rent:         property.current_rent,
+        start_date:           property.start_date,
+        next_adjustment_date: property.next_adjustment_date,
+        adjustment_frequency: property.adjustment_frequency,
+      },
+      from: 'dashboard',
+      autoOpenForm: true,
     })
   }
 
@@ -174,6 +203,7 @@ function App() {
           contract={route.contract}
           onBack={() => handleNav(route.from || 'adjustments')}
           onDataMutation={refreshDashboard}
+          autoOpenForm={route.autoOpenForm ?? false}
         />
       )
     }
@@ -221,6 +251,7 @@ function App() {
     const paidCount         = properties.filter((p) => p.status === 'occupied' && p.current_payment_status === 'paid').length
     const adjustedThisMonth = properties.filter((p) => p.months_since_last_adjustment === 0).length
     const pendingItems      = computePendingItems(properties)
+    const adjustmentItems   = computeAdjustmentAlerts(properties)
 
     return (
       <>
@@ -252,8 +283,10 @@ function App() {
             </div>
           </div>
           <NoticesPanel
-            notices={pendingItems}
-            onSelect={handleNoticePaymentClick}
+            paymentNotices={pendingItems}
+            adjustmentNotices={adjustmentItems}
+            onPaymentSelect={handleNoticePaymentClick}
+            onAdjustmentSelect={handleNoticeAdjustmentClick}
           />
         </div>
       </>

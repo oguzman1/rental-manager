@@ -4,16 +4,18 @@ import { formatCLP } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
-function RentChangesView({ contract, onBack, onDataMutation }) {
+function RentChangesView({ contract, onBack, onDataMutation, autoOpenForm }) {
   const [items, setItems] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState(autoOpenForm)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState(null)
 
-  const [fDate, setFDate] = useState('')
+  const [fDate, setFDate] = useState(
+    autoOpenForm ? (contract.next_adjustment_date ?? contract.start_date ?? '') : ''
+  )
   const [fAmount, setFAmount] = useState('')
   const [fPct, setFPct] = useState('')
   const [fComment, setFComment] = useState('')
@@ -46,7 +48,7 @@ function RentChangesView({ contract, onBack, onDataMutation }) {
   }, [contract.contract_id])
 
   function openForm() {
-    setFDate('')
+    setFDate(contract.next_adjustment_date ?? contract.start_date ?? '')
     setFAmount('')
     setFPct('')
     setFComment('')
@@ -132,6 +134,11 @@ function RentChangesView({ contract, onBack, onDataMutation }) {
           <div className="form-scroll">
             <form onSubmit={handleSubmit}>
               <div className="form-section-label">Nuevo reajuste</div>
+              {contract.current_rent != null && (
+                <div className="rent-change-current">
+                  Renta actual: {formatCLP(contract.current_rent)}
+                </div>
+              )}
               <div className="payment-form-row">
                 <label className="payment-form-label">
                   Fecha efectiva *

@@ -184,7 +184,10 @@ def get_dashboard():
             adjustment_notice_date = calculate_adjustment_notice_date(
                 next_adjustment_date
             )
-            requires_adjustment_notice = today >= adjustment_notice_date
+            requires_adjustment_notice = (
+                today >= adjustment_notice_date
+                and (last_adjustment_date is None or last_adjustment_date < adjustment_notice_date)
+            )
 
         results.append(
             {
@@ -207,6 +210,9 @@ def get_dashboard():
                 "payment_status": item.get("payment_status"),
                 "period_amount": item.get("period_amount"),
                 "latest_period": item.get("latest_period"),
+                "actionable_payment_period": item.get("actionable_payment_period"),
+                "actionable_payment_status": item.get("actionable_payment_status"),
+                "actionable_payment_amount": item.get("actionable_payment_amount"),
                 "contract_id": item.get("contract_id"),
             }
         )
@@ -353,7 +359,10 @@ def get_rent_adjustments(
                 "current_rent": rental["current_rent"],
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
-                "requires_adjustment_notice": today >= adjustment_notice_date,
+                "requires_adjustment_notice": (
+                    today >= adjustment_notice_date
+                    and (last_adjustment_date is None or last_adjustment_date < adjustment_notice_date)
+                ),
                 "last_adjustment_date": last_adjustment_date,
                 "months_since_last_adjustment": months_since_last,
                 "months_until_next_adjustment": months_until_next,

@@ -132,6 +132,9 @@ class DashboardItem(BaseModel):
     payment_status: DashboardPaymentStatus | None = None
     period_amount: int | None = None
     latest_period: str | None = None
+    actionable_payment_period: str | None = None
+    actionable_payment_status: PaymentStatus | None = None
+    actionable_payment_amount: int | None = None
     contract_id: int | None = None
 
 

@@ -652,6 +652,9 @@ def list_dashboard_items() -> list[dict]:
                 ps.saldo_pendiente,
                 pp.period_amount,
                 pp.latest_period,
+                ap.actionable_payment_period,
+                ap.actionable_payment_status,
+                ap.actionable_payment_amount,
                 c.id                    AS contract_id
             FROM properties p
             LEFT JOIN contracts c
@@ -663,10 +666,15 @@ def list_dashboard_items() -> list[dict]:
             LEFT JOIN rent_changes rc
                    ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
             LEFT JOIN (
-                SELECT   contract_id, status
-                FROM     payments
-                WHERE    period = strftime('%Y-%m', 'now')
-                GROUP BY contract_id
+                SELECT
+                    contract_id,
+                    CASE
+                        WHEN COALESCE(paid_amount, 0) >= expected_amount THEN 'paid'
+                        WHEN COALESCE(paid_amount, 0) > 0               THEN 'partial'
+                        ELSE                                                  'pending'
+                    END AS status
+                FROM payments
+                WHERE period = strftime('%Y-%m', 'now')
             ) cp ON c.id = cp.contract_id
             LEFT JOIN (
                 SELECT
@@ -690,6 +698,25 @@ def list_dashboard_items() -> list[dict]:
                 ) p2 ON p1.contract_id = p2.contract_id
                      AND p1.period      = p2.max_period
             ) pp ON c.id = pp.contract_id
+            LEFT JOIN (
+                SELECT
+                    p1.contract_id,
+                    p1.period          AS actionable_payment_period,
+                    CASE
+                        WHEN COALESCE(p1.paid_amount, 0) = 0 THEN 'pending'
+                        ELSE                                      'partial'
+                    END                AS actionable_payment_status,
+                    p1.expected_amount AS actionable_payment_amount
+                FROM payments p1
+                INNER JOIN (
+                    SELECT contract_id, MIN(period) AS min_period
+                    FROM   payments
+                    WHERE  period <= strftime('%Y-%m', 'now')
+                      AND  COALESCE(paid_amount, 0) < expected_amount
+                    GROUP BY contract_id
+                ) p3 ON p1.contract_id = p3.contract_id
+                     AND p1.period      = p3.min_period
+            ) ap ON c.id = ap.contract_id
             WHERE p.parent_property_id IS NULL
             ORDER BY p.id DESC
             """
@@ -721,9 +748,12 @@ def list_dashboard_items() -> list[dict]:
             "last_adjustment_date":   row["last_adjustment_date"],
             "current_payment_status": row["current_payment_status"],
             "payment_status":         payment_status,
-            "period_amount":          row["period_amount"],
-            "latest_period":          row["latest_period"],
-            "contract_id":            row["contract_id"],
+            "period_amount":              row["period_amount"],
+            "latest_period":              row["latest_period"],
+            "actionable_payment_period":  row["actionable_payment_period"],
+            "actionable_payment_status":  row["actionable_payment_status"],
+            "actionable_payment_amount":  row["actionable_payment_amount"],
+            "contract_id":                row["contract_id"],
         })
     return result
 

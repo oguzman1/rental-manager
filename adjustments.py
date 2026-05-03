@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 
 from models import AdjustmentFrequency
 
@@ -38,9 +38,14 @@ def calculate_next_adjustment_date(
 
     return next_date
 
-# Calcula la fecha de aviso de reajuste: un mes calendario antes del reajuste.
-def calculate_adjustment_notice_date(next_adjustment_date: date) -> date:
-    return add_months(next_adjustment_date, -1)
+# Calcula la fecha de aviso de reajuste según notice_days del contrato.
+# notice_days <= 0 o None → fallback a 30 días.
+def calculate_adjustment_notice_date(
+    adjustment_date: date,
+    notice_days: int | None = None,
+) -> date:
+    days = notice_days if notice_days is not None and notice_days > 0 else 30
+    return adjustment_date - timedelta(days=days)
 
 
 def months_between(earlier: date, later: date) -> int:

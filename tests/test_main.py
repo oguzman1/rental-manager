@@ -98,7 +98,7 @@ def test_rent_adjustments_marks_property_as_requiring_notice():
     assert test_adjustment["tenant_name"] == "Test Tenant"
     assert test_adjustment["payment_day"] == 5
     assert test_adjustment["next_adjustment_date"] == "2027-01-01"
-    assert test_adjustment["adjustment_notice_date"] == "2026-12-01"
+    assert test_adjustment["adjustment_notice_date"] == "2026-12-02"
     assert test_adjustment["requires_adjustment_notice"] is True
 
 
@@ -1851,7 +1851,7 @@ def test_requires_notice_false_after_adjustment_within_notice_window():
     # Self-contained: creates its own property (09998-00001) and inserts a rent
     # change via the API within the same test.
     # start=2025-01-01, annual, adjustment_month=january, notice_days=30.
-    # At as_of=2026-12-15: next_adj=2027-01-01, notice_date=2026-12-01 → True.
+    # At as_of=2026-12-15: next_adj=2027-01-01, notice_date=2026-12-02 (30 days) → True.
     # After registering effective_from=2026-12-10 (>= notice_date): → False.
 
     rol = "09998-00001"
@@ -1904,10 +1904,9 @@ def test_requires_notice_false_after_adjustment_within_notice_window():
 def test_requires_notice_true_when_last_adjustment_predates_notice_window():
     # Self-contained: creates its own property (02162-00099) and inserts a past
     # rent change via the API within the same test.
-    # start=2022-03-12, annual, adjustment_month=march.
-    # A rent change at 2023-05-01 predates the 2027 notice window (2027-02-12).
-    # At as_of=2027-02-15: next_adj=2027-03-12, notice_date=2027-02-12.
-    # last_adjustment_date=2023-05-01 < 2027-02-12 → alert must still be active.
+    # start=2022-03-12, annual, notice_days=60.
+    # At as_of=2027-02-15: next_adj=2027-03-12, notice_date=2027-01-11 (60 days before).
+    # last_adjustment_date=2023-05-01 < 2027-01-11 → alert must still be active.
 
     rol = "02162-00099"
     create_r = client.post("/managed-property", json={
@@ -1950,14 +1949,18 @@ def test_requires_notice_true_when_last_adjustment_predates_notice_window():
     r = client.get("/rent-adjustments", params={"as_of": "2027-02-15"})
     assert r.status_code == 200
     item = next(i for i in r.json() if i["rol"] == rol)
+    # notice_days=60 → notice window opens 2027-03-12 - 60 days = 2027-01-11, not one month prior
+    assert item["adjustment_notice_date"] == "2027-01-11"
     assert item["requires_adjustment_notice"] is True, (
         "alert must remain active when the last adjustment predates the current notice window"
     )
 
 
 def test_dashboard_requires_notice_false_after_adjustment():
-    # Creates a fresh property whose notice window starts on the 1st of the current month,
-    # so today is guaranteed to be inside the window regardless of the day.
+    # Creates a fresh property 11 months ago (first of that month), annual freq.
+    # next_adj = first of next month.  With notice_days=32 the window opens
+    # first_of_next_month - 32 days, which always falls in the previous month —
+    # so any day of the current month is guaranteed inside the window.
 
     today = datetime.date.today()
     month = today.month - 11
@@ -1987,7 +1990,7 @@ def test_dashboard_requires_notice_false_after_adjustment():
             "current_rent": 400000,
             "adjustment_frequency": "annual",
             "start_date": start_date_str,
-            "notice_days": 30,
+            "notice_days": 32,
             "adjustment_month": "january",
         },
     }

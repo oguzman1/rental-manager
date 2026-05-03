@@ -3,12 +3,14 @@ import Topbar from './Topbar'
 import { NoticeBadge } from './Badge'
 import { formatCLP, daysUntil, formatMonthsAgo, formatMonthsUntil } from './utils'
 
-const API_URL = 'http://127.0.0.1:8000/rent-adjustments'
+const BASE_URL = 'http://127.0.0.1:8000'
+const API_URL = `${BASE_URL}/rent-adjustments`
 
-function AdjustmentsPage({ onPropertySelect, onRentChangeSelect }) {
+function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateChanged }) {
   const [items, setItems] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [sendingId, setSendingId] = useState(null)
 
   useEffect(() => {
     async function load() {
@@ -24,6 +26,42 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect }) {
     }
     load()
   }, [])
+
+  async function reloadItems() {
+    try {
+      const res = await fetch(API_URL)
+      if (!res.ok) return
+      setItems(await res.json())
+    } catch {
+      // silent — consistent with app error handling style
+    }
+  }
+
+  async function handleManage(item) {
+    if (!item.notice_registered) {
+      if (!item.contract_id) {
+        console.error('handleManage: contract_id missing', item.id)
+        return
+      }
+      setSendingId(item.id)
+      try {
+        const res = await fetch(
+          `${BASE_URL}/contracts/${item.contract_id}/notice-sent`,
+          { method: 'POST' }
+        )
+        if (res.ok) {
+          await reloadItems()
+          onNoticeStateChanged?.()
+        }
+      } catch {
+        // silent — consistent with app error handling style
+      } finally {
+        setSendingId(null)
+      }
+    } else {
+      onRentChangeSelect?.(item)
+    }
+  }
 
   return (
     <>
@@ -87,9 +125,10 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect }) {
                       <td className="td" onClick={(e) => e.stopPropagation()}>
                         <button
                           className="btn-payments"
-                          onClick={() => onRentChangeSelect && onRentChangeSelect(item)}
+                          disabled={sendingId === item.id}
+                          onClick={() => handleManage(item)}
                         >
-                          Gestionar reajustes
+                          Gestionar
                         </button>
                       </td>
                     </tr>

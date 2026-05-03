@@ -185,6 +185,7 @@ def get_dashboard():
         if item["adjustment_frequency"] and item["start_date"]:
             start = date.fromisoformat(item["start_date"])
             freq = AdjustmentFrequency(item["adjustment_frequency"])
+            notice_days = item.get("notice_days")
 
             next_adjustment_date = calculate_next_adjustment_date(
                 start_date=start,
@@ -192,7 +193,7 @@ def get_dashboard():
                 today=today,
             )
             # adjustment_notice_date is for the next future cycle (used to display upcoming date)
-            adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
+            adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date, notice_days)
 
             # due_adjustment_date anchors the current cycle; can be in the past when overdue
             due_adjustment_date = calculate_due_adjustment_date(
@@ -202,10 +203,10 @@ def get_dashboard():
             )
             adjustment_due = today >= due_adjustment_date
 
-            # Current cycle's notice window opens one month before due_adjustment_date.
+            # Current cycle's notice window opens notice_days before due_adjustment_date.
             # For upcoming adjustments this equals adjustment_notice_date.
             # For overdue ones it is a past date that any recent rent_change can satisfy.
-            current_cycle_notice_date = calculate_adjustment_notice_date(due_adjustment_date)
+            current_cycle_notice_date = calculate_adjustment_notice_date(due_adjustment_date, notice_days)
 
             # Cycle is resolved once a rent_change is recorded on or after the window start
             adjustment_done = (
@@ -364,12 +365,14 @@ def get_rent_adjustments(
         start = date.fromisoformat(rental["start_date"])
         freq = AdjustmentFrequency(rental["adjustment_frequency"])
 
+        notice_days = rental.get("notice_days")
+
         next_adjustment_date = calculate_next_adjustment_date(
             start_date=start,
             adjustment_frequency=freq,
             today=today,
         )
-        adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
+        adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date, notice_days)
 
         due_date = calculate_due_adjustment_date(
             start_date=start,
@@ -388,7 +391,7 @@ def get_rent_adjustments(
         notice_sent_at = date.fromisoformat(notice_sent_at_str) if notice_sent_at_str else None
 
         adjustment_due = today >= due_date
-        current_cycle_notice_date = calculate_adjustment_notice_date(due_date)
+        current_cycle_notice_date = calculate_adjustment_notice_date(due_date, notice_days)
         notice_registered = (
             notice_sent_at is not None
             and notice_sent_at >= current_cycle_notice_date

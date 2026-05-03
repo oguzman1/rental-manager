@@ -465,6 +465,7 @@ def list_rentals_for_adjustments() -> list[dict]:
                 c.start_date,
                 {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
                 c.notice_sent_at,
+                c.notice_days,
                 c.id                    AS contract_id
             FROM properties p
             JOIN contracts c
@@ -492,7 +493,8 @@ def list_rentals_for_adjustments() -> list[dict]:
             "start_date": row[8],
             "last_adjustment_date": row[9],
             "notice_sent_at": row[10],
-            "contract_id": row[11],
+            "notice_days": row[11],
+            "contract_id": row[12],
         }
         for row in rows
     ]
@@ -687,6 +689,7 @@ def list_dashboard_items() -> list[dict]:
                 ap.actionable_payment_status,
                 ap.actionable_payment_amount,
                 c.notice_sent_at,
+                c.notice_days,
                 c.id                    AS contract_id
             FROM properties p
             LEFT JOIN contracts c
@@ -824,6 +827,7 @@ def list_dashboard_items() -> list[dict]:
             "actionable_payment_status":  actionable_status,
             "actionable_payment_amount":  actionable_amount,
             "notice_sent_at":             row["notice_sent_at"],
+            "notice_days":                row["notice_days"],
             "contract_id":                contract_id,
         })
     return result

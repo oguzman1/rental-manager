@@ -285,3 +285,21 @@ class TenantDetailResponse(BaseModel):
 class NoticeSentResponse(BaseModel):
     contract_id: int
     notice_sent_at: date
+
+
+class NoticeSentRequest(BaseModel):
+    comment: str | None = None
+
+
+class NoticeRevertResponse(BaseModel):
+    contract_id: int
+
+
+class NoticeEventItem(BaseModel):
+    id: int
+    contract_id: int
+    due_adjustment_date: date
+    event_type: str
+    event_at: date
+    comment: str | None = None
+    created_at: str

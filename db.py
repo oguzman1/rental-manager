@@ -86,10 +86,17 @@ def init_db():
                 contract_file_name   TEXT,
                 contract_file_path   TEXT,
                 contract_signed_at   TEXT,
+                notice_sent_at       TEXT,
                 created_at           TEXT    NOT NULL DEFAULT (date('now'))
             )
             """
         )
+
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+        }
+        if "notice_sent_at" not in existing_cols:
+            conn.execute("ALTER TABLE contracts ADD COLUMN notice_sent_at TEXT")
 
         conn.execute(
             """
@@ -457,6 +464,7 @@ def list_rentals_for_adjustments() -> list[dict]:
                 c.adjustment_frequency,
                 c.start_date,
                 {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
+                c.notice_sent_at,
                 c.id                    AS contract_id
             FROM properties p
             JOIN contracts c
@@ -483,7 +491,8 @@ def list_rentals_for_adjustments() -> list[dict]:
             "adjustment_frequency": row[7],
             "start_date": row[8],
             "last_adjustment_date": row[9],
-            "contract_id": row[10],
+            "notice_sent_at": row[10],
+            "contract_id": row[11],
         }
         for row in rows
     ]
@@ -677,6 +686,7 @@ def list_dashboard_items() -> list[dict]:
                 ap.actionable_payment_period,
                 ap.actionable_payment_status,
                 ap.actionable_payment_amount,
+                c.notice_sent_at,
                 c.id                    AS contract_id
             FROM properties p
             LEFT JOIN contracts c
@@ -813,6 +823,7 @@ def list_dashboard_items() -> list[dict]:
             "actionable_payment_period":  actionable_period,
             "actionable_payment_status":  actionable_status,
             "actionable_payment_amount":  actionable_amount,
+            "notice_sent_at":             row["notice_sent_at"],
             "contract_id":                contract_id,
         })
     return result
@@ -1045,6 +1056,16 @@ def close_contract(contract_id: int, end_date: str) -> None:
                 (row[0],),
             )
         conn.commit()
+
+
+def mark_notice_sent(contract_id: int, noticed_at: date) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE contracts SET notice_sent_at = ? WHERE id = ? AND is_active = 1",
+            (noticed_at.isoformat(), contract_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
 
 
 def list_tenants() -> list[dict]:

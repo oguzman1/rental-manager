@@ -94,6 +94,10 @@ class RentAdjustmentItem(BaseModel):
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     months_until_next_adjustment: int | None = None
+    notice_sent_at: date | None = None
+    notice_registered: bool = False
+    adjustment_due: bool = False
+    due_adjustment_date: date | None = None
 
 
 class RentChangeItem(BaseModel):
@@ -136,6 +140,10 @@ class DashboardItem(BaseModel):
     actionable_payment_status: PaymentStatus | None = None
     actionable_payment_amount: int | None = None
     contract_id: int | None = None
+    due_adjustment_date: date | None = None
+    notice_sent_at: date | None = None
+    notice_registered: bool = False
+    adjustment_due: bool = False
 
 
 class ContractListItem(BaseModel):
@@ -272,3 +280,8 @@ class TenantDetailResponse(BaseModel):
     email: str | None = None
     phone: str | None = None
     notes: str | None = None
+
+
+class NoticeSentResponse(BaseModel):
+    contract_id: int
+    notice_sent_at: date

@@ -2240,6 +2240,113 @@ def test_gap_detection_no_false_positive_when_all_due_paid():
     )
 
 
+# ── Adjustment notice-sent workflow ──────────────────────────────────────────
+
+def _notice_property(rol: str, start_date: str, adjustment_frequency: str = "annual") -> dict:
+    return {
+        "property": {
+            "comuna": "TEST",
+            "rol": rol,
+            "address": "TEST ADDRESS",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+        },
+        "rental": {
+            "tenant_name": "Test Tenant",
+            "payment_day": 5,
+            "property_label": f"test {rol}",
+            "current_rent": 100000,
+            "adjustment_frequency": adjustment_frequency,
+            "start_date": start_date,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    }
+
+
+def test_notice_sent_on_active_contract_returns_200():
+    client.post("/managed-property", json=_notice_property("NTEST-BASIC-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-BASIC-001")
+    r = client.post(f"/contracts/{cid}/notice-sent")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["contract_id"] == cid
+    assert "notice_sent_at" in body
+    assert body["notice_sent_at"] is not None
+
+
+def test_notice_sent_on_nonexistent_contract_returns_404():
+    r = client.post("/contracts/99999/notice-sent")
+    assert r.status_code == 404
+
+
+def test_dashboard_notice_registered_true_after_notice_sent():
+    # Creates its own overdue contract, posts notice-sent, then verifies notice_registered=True.
+    client.post("/managed-property", json=_notice_property("NTEST-NOTREG-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-NOTREG-001")
+    client.post(f"/contracts/{cid}/notice-sent")
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["notice_registered"] is True
+
+
+def test_notice_registered_true_when_marked_after_adjustment_date():
+    # start 13 months ago → due_adjustment_date = first of last month (past)
+    # marking notice after the due date must still count: notice_sent_at >= current_cycle_notice_date
+    client.post("/managed-property", json=_notice_property("NTEST-AFTER-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-AFTER-001")
+
+    r = client.post(f"/contracts/{cid}/notice-sent")
+    assert r.status_code == 200
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["notice_registered"] is True
+    assert item["adjustment_due"] is True
+
+
+def test_requires_adjustment_notice_false_after_rent_change_applied():
+    # start 13 months ago → overdue; applying a rent_change within the cycle window clears the alert
+    client.post("/managed-property", json=_notice_property("NTEST-RESOLVE-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-RESOLVE-001")
+    rc = client.post(
+        f"/contracts/{cid}/rent-changes",
+        json={"effective_from": _first_day_for_months_ago(1), "amount": 110000},
+    )
+    assert rc.status_code == 201
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["requires_adjustment_notice"] is False
+
+
+def test_dashboard_adjustment_due_true_when_due_date_is_past():
+    # start 13 months ago → due_adjustment_date = first of last month (past)
+    client.post("/managed-property", json=_notice_property("NTEST-DUEYES-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-DUEYES-001")
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["adjustment_due"] is True
+    assert item["requires_adjustment_notice"] is True
+    assert item["due_adjustment_date"] is not None
+    assert item["due_adjustment_date"] <= datetime.date.today().isoformat()
+
+
+def test_dashboard_adjustment_due_false_when_due_date_is_future():
+    # start 11 months ago → due_adjustment_date = first of next month (future)
+    # adj_notice_date = first of current month → notice window is open, adjustment not yet due
+    client.post("/managed-property", json=_notice_property("NTEST-DUENO-001", _first_day_for_months_ago(11)))
+    cid = _get_contract_id_for_rol("NTEST-DUENO-001")
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["adjustment_due"] is False
+    assert item["requires_adjustment_notice"] is True
+    assert item["due_adjustment_date"] is not None
+    assert item["due_adjustment_date"] > datetime.date.today().isoformat()
+
+
 # Frontend targetPeriod no-rows path — verified by code inspection.
 # PaymentsView.jsx openAdd(): the payments.length === 0 branch previously called
 # setFormCustomPeriod(todayLocal().slice(0, 7)), which ignored targetPeriod.

@@ -79,6 +79,9 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect }) {
                       <td className="td">
                         <NoticeBadge
                           daysUntilNotice={daysUntil(item.adjustment_notice_date)}
+                          noticeRegistered={item.notice_registered}
+                          adjustmentDue={item.adjustment_due}
+                          noticeSentAt={item.notice_sent_at}
                         />
                       </td>
                       <td className="td" onClick={(e) => e.stopPropagation()}>

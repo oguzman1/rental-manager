@@ -42,11 +42,11 @@ function computePendingItems(properties) {
 
 function computeAdjustmentAlerts(properties) {
   return properties
-    .filter((p) => p.requires_adjustment_notice === true)
+    .filter((p) => p.requires_adjustment_notice && (!p.notice_registered || p.adjustment_due))
     .sort((a, b) => {
-      if (!a.next_adjustment_date) return 1
-      if (!b.next_adjustment_date) return -1
-      return a.next_adjustment_date.localeCompare(b.next_adjustment_date)
+      if (!a.due_adjustment_date) return 1
+      if (!b.due_adjustment_date) return -1
+      return a.due_adjustment_date.localeCompare(b.due_adjustment_date)
     })
 }
 
@@ -137,6 +137,18 @@ function App() {
       from: 'dashboard',
       autoOpenForm: true,
     })
+  }
+
+  async function handleMarkNoticeSent(property) {
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8000/contracts/${property.contract_id}/notice-sent`,
+        { method: 'POST' }
+      )
+      if (res.ok) await refreshDashboard()
+    } catch {
+      // silent — stale data is better than a crash
+    }
   }
 
   function handleRentChangeSelect(contract) {
@@ -287,6 +299,7 @@ function App() {
             adjustmentNotices={adjustmentItems}
             onPaymentSelect={handleNoticePaymentClick}
             onAdjustmentSelect={handleNoticeAdjustmentClick}
+            onMarkNoticeSent={handleMarkNoticeSent}
           />
         </div>
       </>

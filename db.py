@@ -141,6 +141,27 @@ def init_db():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS adjustment_notice_events (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                contract_id         INTEGER NOT NULL REFERENCES contracts(id),
+                due_adjustment_date TEXT    NOT NULL,
+                event_type          TEXT    NOT NULL CHECK(event_type IN ('sent', 'reverted')),
+                event_at            TEXT    NOT NULL,
+                comment             TEXT,
+                created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_adjustment_notice_events_contract_id
+            ON adjustment_notice_events(contract_id)
+            """
+        )
+
         conn.commit()
 
 
@@ -1062,14 +1083,103 @@ def close_contract(contract_id: int, end_date: str) -> None:
         conn.commit()
 
 
-def mark_notice_sent(contract_id: int, noticed_at: date) -> bool:
+def mark_notice_sent(
+    contract_id: int,
+    noticed_at: date,
+    comment: str | None,
+    due_adjustment_date: date,
+) -> bool:
     with get_connection() as conn:
         cursor = conn.execute(
             "UPDATE contracts SET notice_sent_at = ? WHERE id = ? AND is_active = 1",
             (noticed_at.isoformat(), contract_id),
         )
+        if cursor.rowcount == 0:
+            conn.commit()
+            return False
+        conn.execute(
+            """
+            INSERT INTO adjustment_notice_events
+                (contract_id, due_adjustment_date, event_type, event_at, comment)
+            VALUES (?, ?, 'sent', ?, ?)
+            """,
+            (contract_id, due_adjustment_date.isoformat(), noticed_at.isoformat(), comment),
+        )
         conn.commit()
-    return cursor.rowcount > 0
+    return True
+
+
+def revert_notice_sent(
+    contract_id: int,
+    reverted_at: date,
+    comment: str | None,
+    fallback_due_date: date,
+) -> None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT notice_sent_at FROM contracts WHERE id = ? AND is_active = 1",
+            (contract_id,),
+        ).fetchone()
+        if row is None:
+            raise LookupError("Active contract not found.")
+        if row[0] is None:
+            raise ValueError("No active notice to revert.")
+
+        event_row = conn.execute(
+            """
+            SELECT due_adjustment_date FROM adjustment_notice_events
+            WHERE contract_id = ? AND event_type = 'sent'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (contract_id,),
+        ).fetchone()
+        due_date = event_row[0] if event_row else fallback_due_date.isoformat()
+
+        conn.execute(
+            "UPDATE contracts SET notice_sent_at = NULL WHERE id = ? AND is_active = 1",
+            (contract_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO adjustment_notice_events
+                (contract_id, due_adjustment_date, event_type, event_at, comment)
+            VALUES (?, ?, 'reverted', ?, ?)
+            """,
+            (contract_id, due_date, reverted_at.isoformat(), comment),
+        )
+        conn.commit()
+
+
+def list_notice_events(contract_id: int) -> list[dict]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE id = ?", (contract_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError("Contract not found.")
+
+        rows = conn.execute(
+            """
+            SELECT id, contract_id, due_adjustment_date, event_type, event_at, comment, created_at
+            FROM adjustment_notice_events
+            WHERE contract_id = ?
+            ORDER BY id DESC
+            """,
+            (contract_id,),
+        ).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "contract_id": r[1],
+            "due_adjustment_date": r[2],
+            "event_type": r[3],
+            "event_at": r[4],
+            "comment": r[5],
+            "created_at": r[6],
+        }
+        for r in rows
+    ]
 
 
 def list_tenants() -> list[dict]:

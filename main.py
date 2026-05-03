@@ -35,9 +35,11 @@ from db import (
     list_managed_properties,
     list_payments_for_contract,
     list_rent_changes,
+    list_notice_events,
     list_rentals_for_adjustments,
     list_tenants,
     mark_notice_sent,
+    revert_notice_sent,
     tenant_has_any_contract,
     update_contract,
     update_managed_property,
@@ -56,6 +58,9 @@ from models import (
     ManagedPropertyCreate,
     ManagedPropertyListItem,
     ManagedPropertyResponse,
+    NoticeEventItem,
+    NoticeRevertResponse,
+    NoticeSentRequest,
     NoticeSentResponse,
     PaymentCreate,
     PaymentResponse,
@@ -587,11 +592,75 @@ def close_contract_endpoint(contract_id: int, data: ContractCloseRequest):
         404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
     },
 )
-def mark_notice_sent_endpoint(contract_id: int):
+def mark_notice_sent_endpoint(
+    contract_id: int,
+    payload: NoticeSentRequest | None = None,
+):
     today = date.today()
-    if not mark_notice_sent(contract_id, today):
+    comment = payload.comment if payload else None
+
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    start_date = date.fromisoformat(contract["start_date"])
+    freq = AdjustmentFrequency(contract["adjustment_frequency"])
+    due_adj_date = calculate_due_adjustment_date(start_date, freq, today)
+
+    if not mark_notice_sent(contract_id, today, comment, due_adj_date):
         raise HTTPException(status_code=404, detail="Active contract not found.")
     return {"contract_id": contract_id, "notice_sent_at": today}
+
+
+@app.post(
+    "/contracts/{contract_id}/notice-revert",
+    tags=["rent-adjustments"],
+    summary="Revert a notice previously marked as sent",
+    response_model=NoticeRevertResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+        409: {"model": ErrorResponse, "description": "No active notice to revert"},
+    },
+)
+def revert_notice_sent_endpoint(
+    contract_id: int,
+    payload: NoticeSentRequest | None = None,
+):
+    today = date.today()
+    comment = payload.comment if payload else None
+
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    start_date = date.fromisoformat(contract["start_date"])
+    freq = AdjustmentFrequency(contract["adjustment_frequency"])
+    fallback_due_date = calculate_due_adjustment_date(start_date, freq, today)
+
+    try:
+        revert_notice_sent(contract_id, today, comment, fallback_due_date)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return {"contract_id": contract_id}
+
+
+@app.get(
+    "/contracts/{contract_id}/notice-events",
+    tags=["rent-adjustments"],
+    summary="List notice events for a contract",
+    response_model=list[NoticeEventItem],
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found"},
+    },
+)
+def list_notice_events_endpoint(contract_id: int):
+    try:
+        return list_notice_events(contract_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get(

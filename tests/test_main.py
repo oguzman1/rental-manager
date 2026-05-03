@@ -2350,6 +2350,127 @@ def test_dashboard_adjustment_due_false_when_due_date_is_future():
     assert item["due_adjustment_date"] > datetime.date.today().isoformat()
 
 
+# ── Adjustment notice events ──────────────────────────────────────────────────
+
+def test_notice_events_empty_for_fresh_contract():
+    client.post("/managed-property", json=_notice_property("NEVT-EMPTY-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-EMPTY-001")
+    r = client.get(f"/contracts/{cid}/notice-events")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_notice_events_returns_404_for_missing_contract():
+    r = client.get("/contracts/99998/notice-events")
+    assert r.status_code == 404
+
+
+def test_notice_sent_creates_event_row():
+    client.post("/managed-property", json=_notice_property("NEVT-SENT-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-SENT-001")
+    client.post(f"/contracts/{cid}/notice-sent")
+    r = client.get(f"/contracts/{cid}/notice-events")
+    assert r.status_code == 200
+    events = r.json()
+    assert len(events) == 1
+    assert events[0]["event_type"] == "sent"
+    assert events[0]["contract_id"] == cid
+    assert events[0]["due_adjustment_date"] is not None
+    assert events[0]["event_at"] is not None
+
+
+def test_notice_sent_with_comment_persisted():
+    client.post("/managed-property", json=_notice_property("NEVT-CMT-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-CMT-001")
+    r = client.post(f"/contracts/{cid}/notice-sent", json={"comment": "Carta enviada por correo"})
+    assert r.status_code == 200
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+    assert events[0]["comment"] == "Carta enviada por correo"
+
+
+def test_notice_sent_no_body_backward_compatible():
+    client.post("/managed-property", json=_notice_property("NEVT-NOBODY-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-NOBODY-001")
+    r = client.post(f"/contracts/{cid}/notice-sent")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["contract_id"] == cid
+    assert body["notice_sent_at"] is not None
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+    assert len(events) == 1
+    assert events[0]["comment"] is None
+
+
+def test_notice_revert_clears_current_state():
+    client.post("/managed-property", json=_notice_property("NEVT-REV-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-REV-001")
+    client.post(f"/contracts/{cid}/notice-sent")
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["notice_registered"] is True
+
+    r = client.post(f"/contracts/{cid}/notice-revert")
+    assert r.status_code == 200
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i.get("contract_id") == cid)
+    assert item["notice_registered"] is False
+
+
+def test_notice_revert_creates_reverted_event():
+    client.post("/managed-property", json=_notice_property("NEVT-REV-002", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-REV-002")
+    client.post(f"/contracts/{cid}/notice-sent")
+    client.post(f"/contracts/{cid}/notice-revert")
+
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+    assert len(events) == 2
+    # newest first
+    assert events[0]["event_type"] == "reverted"
+    assert events[1]["event_type"] == "sent"
+
+
+def test_notice_revert_no_active_notice_returns_409():
+    client.post("/managed-property", json=_notice_property("NEVT-409-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-409-001")
+    r = client.post(f"/contracts/{cid}/notice-revert")
+    assert r.status_code == 409
+
+
+def test_reverted_event_uses_sent_event_due_date():
+    client.post("/managed-property", json=_notice_property("NEVT-DUEDATE-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-DUEDATE-001")
+    client.post(f"/contracts/{cid}/notice-sent")
+    client.post(f"/contracts/{cid}/notice-revert")
+
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+    sent_event = next(e for e in events if e["event_type"] == "sent")
+    reverted_event = next(e for e in events if e["event_type"] == "reverted")
+    assert reverted_event["due_adjustment_date"] == sent_event["due_adjustment_date"]
+
+
+def test_notice_events_ordered_newest_first():
+    client.post("/managed-property", json=_notice_property("NEVT-ORDER-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-ORDER-001")
+    client.post(f"/contracts/{cid}/notice-sent")
+    client.post(f"/contracts/{cid}/notice-revert")
+    client.post(f"/contracts/{cid}/notice-sent")
+
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+    assert len(events) == 3
+    assert events[0]["event_type"] == "sent"
+    assert events[1]["event_type"] == "reverted"
+    assert events[2]["event_type"] == "sent"
+    # IDs descending confirms ordering
+    assert events[0]["id"] > events[1]["id"] > events[2]["id"]
+
+
+def test_notice_revert_on_nonexistent_contract_returns_404():
+    r = client.post("/contracts/99997/notice-revert")
+    assert r.status_code == 404
+
+
 # Frontend targetPeriod no-rows path — verified by code inspection.
 # PaymentsView.jsx openAdd(): the payments.length === 0 branch previously called
 # setFormCustomPeriod(todayLocal().slice(0, 7)), which ignored targetPeriod.

@@ -1,20 +1,14 @@
 import { PaymentStateBadge } from './Badge'
-import { formatCLP, daysUntil, formatRentPeriod, formatPaymentDueTiming } from './utils'
+import { formatCLP, daysUntil, formatRentPeriod, formatPaymentDueTiming, formatPeriodLabel } from './utils'
 
-function formatNoticeTiming(isoDate) {
-  if (!isoDate) return null
+function formatAdjustmentTiming(isoDate) {
   const days = daysUntil(isoDate)
   if (days === null) return null
-  if (days === 0) return 'Aviso desde hoy'
-  if (days > 0) return days === 1 ? 'Avisar en 1 día' : `Avisar en ${days} días`
-  const abs = Math.abs(days)
-  return abs === 1 ? 'Aviso pendiente hace 1 día' : `Aviso pendiente hace ${abs} días`
-}
-
-const PAYMENT_CARD_TITLE = {
-  overdue: 'Pago vencido',
-  partial: 'Pago parcial',
-  pending: 'Pago por vencer',
+  if (days === 0) return 'Vence hoy'
+  if (days === 1) return 'Vence mañana'
+  if (days > 1) return `Vence en ${days} días`
+  if (days === -1) return 'Vencido hace 1 día'
+  return `Vencido hace ${Math.abs(days)} días`
 }
 
 const PAYMENT_CARD_CLASS = {
@@ -23,7 +17,7 @@ const PAYMENT_CARD_CLASS = {
   pending: 'notice-card-next_30_days',
 }
 
-function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAdjustmentSelect }) {
+function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAdjustmentSelect, onMarkNoticeSent }) {
   const hasPayments    = paymentNotices.length > 0
   const hasAdjustments = adjustmentNotices.length > 0
   const totalCount     = paymentNotices.length + adjustmentNotices.length
@@ -58,7 +52,8 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
                 <AdjustmentCard
                   key={item.id}
                   item={item}
-                  onClick={() => onAdjustmentSelect(item)}
+                  onApplyAdjustment={() => onAdjustmentSelect(item)}
+                  onMarkNoticeSent={() => onMarkNoticeSent(item)}
                 />
               ))}
             </div>
@@ -93,9 +88,6 @@ function PaymentCard({ item, onClick }) {
       </div>
       {dueTiming && <div className="notice-card-date">{dueTiming}</div>}
       <div className="notice-card-tenant">{meta}</div>
-      {item.tenant_name && (
-        <div className="notice-card-tenant">{item.tenant_name}</div>
-      )}
       <button
         className="btn-payments notice-card-btn"
         onClick={(e) => { e.stopPropagation(); onClick() }}
@@ -106,35 +98,36 @@ function PaymentCard({ item, onClick }) {
   )
 }
 
-function AdjustmentCard({ item, onClick }) {
-  const noticeTiming = formatNoticeTiming(item.adjustment_notice_date)
+function AdjustmentCard({ item, onApplyAdjustment, onMarkNoticeSent }) {
+  const dateRef = item.due_adjustment_date ?? item.next_adjustment_date
+  const title   = `Reajuste ${formatPeriodLabel((dateRef ?? '').slice(0, 7))}`
+  const timing  = formatAdjustmentTiming(dateRef)
+  const meta    = `${item.property_label ?? item.rol}: ${formatCLP(item.current_rent)}`
+
+  function handleClick() {
+    if (!item.notice_registered) {
+      onMarkNoticeSent()
+    } else if (item.adjustment_due) {
+      onApplyAdjustment()
+    }
+  }
 
   return (
     <div
-      className="notice-card notice-card-adjustment"
-      onClick={onClick}
+      className={`notice-card ${item.adjustment_due ? 'notice-card-overdue' : 'notice-card-next_30_days'}`}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      onKeyDown={(e) => e.key === 'Enter' && handleClick()}
     >
       <div className="notice-card-top">
-        <span className="notice-card-name">Reajuste próximo</span>
+        <span className="notice-card-name">{title}</span>
       </div>
-      <div className="notice-card-tenant">
-        {item.property_label ?? item.rol}
-      </div>
-      {item.tenant_name && (
-        <div className="notice-card-tenant">{item.tenant_name}</div>
-      )}
-      {noticeTiming && (
-        <div className="notice-card-date">{noticeTiming}</div>
-      )}
-      {item.next_adjustment_date && (
-        <div className="notice-card-date">Próx. reajuste: {item.next_adjustment_date}</div>
-      )}
+      {timing && <div className="notice-card-date">{timing}</div>}
+      <div className="notice-card-tenant">{meta}</div>
       <button
         className="btn-payments notice-card-btn"
-        onClick={(e) => { e.stopPropagation(); onClick() }}
+        onClick={(e) => { e.stopPropagation(); handleClick() }}
       >
         Resolver
       </button>

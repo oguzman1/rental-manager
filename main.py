@@ -37,6 +37,7 @@ from db import (
     list_rent_changes,
     list_rentals_for_adjustments,
     list_tenants,
+    mark_notice_sent,
     tenant_has_any_contract,
     update_contract,
     update_managed_property,
@@ -55,6 +56,7 @@ from models import (
     ManagedPropertyCreate,
     ManagedPropertyListItem,
     ManagedPropertyResponse,
+    NoticeSentResponse,
     PaymentCreate,
     PaymentResponse,
     PaymentUpdate,
@@ -168,6 +170,8 @@ def get_dashboard():
         next_adjustment_date = None
         adjustment_notice_date = None
         requires_adjustment_notice = False
+        notice_registered = False
+        adjustment_due = False
 
         last_adj_str = item["last_adjustment_date"]
         last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
@@ -175,18 +179,47 @@ def get_dashboard():
             months_between(last_adjustment_date, today) if last_adjustment_date else None
         )
 
+        notice_sent_at_str = item.get("notice_sent_at")
+        notice_sent_at = date.fromisoformat(notice_sent_at_str) if notice_sent_at_str else None
+
         if item["adjustment_frequency"] and item["start_date"]:
+            start = date.fromisoformat(item["start_date"])
+            freq = AdjustmentFrequency(item["adjustment_frequency"])
+
             next_adjustment_date = calculate_next_adjustment_date(
-                start_date=date.fromisoformat(item["start_date"]),
-                adjustment_frequency=AdjustmentFrequency(item["adjustment_frequency"]),
+                start_date=start,
+                adjustment_frequency=freq,
                 today=today,
             )
-            adjustment_notice_date = calculate_adjustment_notice_date(
-                next_adjustment_date
+            # adjustment_notice_date is for the next future cycle (used to display upcoming date)
+            adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date)
+
+            # due_adjustment_date anchors the current cycle; can be in the past when overdue
+            due_adjustment_date = calculate_due_adjustment_date(
+                start_date=start,
+                adjustment_frequency=freq,
+                today=today,
             )
-            requires_adjustment_notice = (
-                today >= adjustment_notice_date
-                and (last_adjustment_date is None or last_adjustment_date < adjustment_notice_date)
+            adjustment_due = today >= due_adjustment_date
+
+            # Current cycle's notice window opens one month before due_adjustment_date.
+            # For upcoming adjustments this equals adjustment_notice_date.
+            # For overdue ones it is a past date that any recent rent_change can satisfy.
+            current_cycle_notice_date = calculate_adjustment_notice_date(due_adjustment_date)
+
+            # Cycle is resolved once a rent_change is recorded on or after the window start
+            adjustment_done = (
+                last_adjustment_date is not None
+                and last_adjustment_date >= current_cycle_notice_date
+            )
+            # Show alert during the upcoming notice window OR when the adjustment is overdue
+            requires_adjustment_notice = not adjustment_done and (
+                today >= adjustment_notice_date or adjustment_due
+            )
+
+            notice_registered = (
+                notice_sent_at is not None
+                and notice_sent_at >= current_cycle_notice_date
             )
 
         results.append(
@@ -214,6 +247,10 @@ def get_dashboard():
                 "actionable_payment_status": item.get("actionable_payment_status"),
                 "actionable_payment_amount": item.get("actionable_payment_amount"),
                 "contract_id": item.get("contract_id"),
+                "due_adjustment_date": due_adjustment_date if item["adjustment_frequency"] and item["start_date"] else None,
+                "notice_sent_at": notice_sent_at,
+                "notice_registered": notice_registered,
+                "adjustment_due": adjustment_due,
             }
         )
 
@@ -347,6 +384,16 @@ def get_rent_adjustments(
             months_between(last_adjustment_date, today) if last_adjustment_date else None
         )
 
+        notice_sent_at_str = rental.get("notice_sent_at")
+        notice_sent_at = date.fromisoformat(notice_sent_at_str) if notice_sent_at_str else None
+
+        adjustment_due = today >= due_date
+        current_cycle_notice_date = calculate_adjustment_notice_date(due_date)
+        notice_registered = (
+            notice_sent_at is not None
+            and notice_sent_at >= current_cycle_notice_date
+        )
+
         results.append(
             {
                 "id": rental["id"],
@@ -366,6 +413,10 @@ def get_rent_adjustments(
                 "last_adjustment_date": last_adjustment_date,
                 "months_since_last_adjustment": months_since_last,
                 "months_until_next_adjustment": months_until_next,
+                "notice_sent_at": notice_sent_at,
+                "notice_registered": notice_registered,
+                "adjustment_due": adjustment_due,
+                "due_adjustment_date": due_date,
             }
         )
 
@@ -522,6 +573,22 @@ def close_contract_endpoint(contract_id: int, data: ContractCloseRequest):
         )
     close_contract(contract_id, str(data.end_date))
     return get_contract(contract_id)
+
+
+@app.post(
+    "/contracts/{contract_id}/notice-sent",
+    tags=["rent-adjustments"],
+    summary="Record that tenant was manually notified of upcoming adjustment",
+    response_model=NoticeSentResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def mark_notice_sent_endpoint(contract_id: int):
+    today = date.today()
+    if not mark_notice_sent(contract_id, today):
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+    return {"contract_id": contract_id, "notice_sent_at": today}
 
 
 @app.get(

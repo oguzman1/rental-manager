@@ -75,7 +75,28 @@ export function PaymentStateBadge({ state }) {
   )
 }
 
-export function NoticeBadge({ daysUntilNotice }) {
+export function NoticeBadge({ daysUntilNotice, noticeRegistered, adjustmentDue, noticeSentAt }) {
+  if (noticeRegistered && !adjustmentDue) {
+    return (
+      <div>
+        <span className="badge badge-ok">
+          <span className="badge-dot" />
+          Aviso registrado
+        </span>
+        {noticeSentAt && <div className="td-sub">Avisado el {noticeSentAt}</div>}
+      </div>
+    )
+  }
+
+  if (adjustmentDue) {
+    return (
+      <span className="badge badge-danger">
+        <span className="badge-dot" />
+        Reajuste pendiente
+      </span>
+    )
+  }
+
   if (daysUntilNotice === null || daysUntilNotice === undefined) return null
 
   if (daysUntilNotice < 0) {

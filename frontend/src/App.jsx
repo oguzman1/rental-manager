@@ -239,6 +239,7 @@ function App() {
         <AdjustmentsPage
           onPropertySelect={handlePropertySelect}
           onRentChangeSelect={handleRentChangeSelect}
+          onNoticeStateChanged={refreshDashboard}
         />
       )
     }

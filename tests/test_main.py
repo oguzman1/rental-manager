@@ -1503,6 +1503,76 @@ def test_list_contracts_includes_notice_days_and_comment():
     assert "notice_days" in contract
     assert "adjustment_month" in contract
     assert "comment" in contract
+    assert "contract_document_url" in contract
+
+
+def test_create_contract_with_document_url():
+    r_prop = client.post("/managed-property", json={
+        "property": {
+            "comuna": "TEST",
+            "rol": "CDOC-CREATE-001",
+            "address": "Test Address 1",
+            "destination": "HABITACIONAL",
+            "status": "vacant",
+        },
+        "rental": None,
+    })
+    assert r_prop.status_code == 200
+    prop_id = r_prop.json()["id"]
+
+    r_tenant = client.post("/tenants", json={"display_name": "Tenant Doc Create"})
+    assert r_tenant.status_code == 200
+    tenant_id = r_tenant.json()["id"]
+
+    doc_url = "https://drive.google.com/file/d/test-create-doc"
+    r = client.post("/contracts", json={
+        "property_id": prop_id,
+        "tenant_id": tenant_id,
+        "start_date": "2024-01-01",
+        "payment_day": 5,
+        "notice_days": 30,
+        "adjustment_frequency": "annual",
+        "adjustment_month": "january",
+        "current_rent": 500000,
+        "contract_document_url": doc_url,
+    })
+    assert r.status_code == 200
+    assert r.json()["contract_document_url"] == doc_url
+
+
+def test_contract_document_url_null_by_default():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}")
+    assert r.status_code == 200
+    assert r.json()["contract_document_url"] is None
+
+
+def test_update_contract_document_url():
+    _, _, contract_id = _setup_contract_scenario()
+    url = "/home/oscar/documentos/contrato_prueba.pdf"
+    r = client.patch(f"/contracts/{contract_id}", json={"contract_document_url": url})
+    assert r.status_code == 200
+    assert r.json()["contract_document_url"] == url
+    # Verify it persists via GET
+    r2 = client.get(f"/contracts/{contract_id}")
+    assert r2.json()["contract_document_url"] == url
+
+
+def test_get_contract_includes_document_url():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}")
+    assert r.status_code == 200
+    assert "contract_document_url" in r.json()
+
+
+def test_contract_document_url_in_list():
+    _, _, contract_id = _setup_contract_scenario()
+    url = "https://dropbox.com/sh/test/contract.pdf"
+    client.patch(f"/contracts/{contract_id}", json={"contract_document_url": url})
+    contracts = client.get("/contracts").json()
+    contract = next((c for c in contracts if c["id"] == contract_id), None)
+    assert contract is not None
+    assert contract["contract_document_url"] == url
 
 
 # --- FASE 4: Reajustes / rent_changes ---

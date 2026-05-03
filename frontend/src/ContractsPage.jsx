@@ -28,6 +28,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
   const [fAdjMonth, setFAdjMonth] = useState('')
   const [fNoticeDays, setFNoticeDays] = useState('0')
   const [fComment, setFComment] = useState('')
+  const [fDocumentUrl, setFDocumentUrl] = useState('')
 
   async function loadContracts() {
     setIsLoading(true)
@@ -70,6 +71,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
     setFAdjMonth('')
     setFNoticeDays('0')
     setFComment('')
+    setFDocumentUrl('')
     setFormError(null)
   }
 
@@ -103,6 +105,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
       setFFrequency(data.adjustment_frequency)
       setFAdjMonth(data.adjustment_month ?? '')
       setFComment(data.comment ?? '')
+      setFDocumentUrl(data.contract_document_url ?? '')
     } catch (err) {
       setFormError(`Error al cargar contrato: ${err.message}`)
     }
@@ -129,6 +132,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
               adjustment_frequency: fFrequency,
               adjustment_month: fAdjMonth.trim() || null,
               comment: fComment.trim() || null,
+              contract_document_url: fDocumentUrl.trim() || null,
             }),
           })
         : await fetch(`${API_BASE}/contracts`, {
@@ -144,6 +148,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
               adjustment_month: fAdjMonth.trim() || null,
               current_rent: parseInt(fRent, 10),
               comment: fComment.trim() || null,
+              contract_document_url: fDocumentUrl.trim() || null,
             }),
           })
 
@@ -342,6 +347,17 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                     style={{ minWidth: 300 }}
                   />
                 </label>
+                <label className="payment-form-label">
+                  Enlace al contrato
+                  <input
+                    className="payment-form-input"
+                    type="text"
+                    value={fDocumentUrl}
+                    onChange={(e) => setFDocumentUrl(e.target.value)}
+                    placeholder="URL o ruta al documento (opcional)"
+                    style={{ minWidth: 320 }}
+                  />
+                </label>
               </div>
 
               <div className="payment-form-actions" style={{ marginTop: 20 }}>
@@ -432,6 +448,26 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               >
                                 Cerrar contrato
                               </button>
+                              {item.contract_document_url && (
+                                <>
+                                  {' '}
+                                  {/^(https?|file):\/\//i.test(item.contract_document_url) ? (
+                                    <a
+                                      className="btn-payments"
+                                      href={item.contract_document_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      Abrir contrato
+                                    </a>
+                                  ) : (
+                                    <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+                                      Documento registrado
+                                    </span>
+                                  )}
+                                </>
+                              )}
                             </td>
                           </tr>
                         )

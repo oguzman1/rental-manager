@@ -159,6 +159,7 @@ class ContractListItem(BaseModel):
     notice_days: int
     adjustment_month: str | None = None
     comment: str | None = None
+    contract_document_url: str | None = None
 
 
 class ContractCreate(BaseModel):
@@ -171,6 +172,7 @@ class ContractCreate(BaseModel):
     adjustment_month: str | None = None
     current_rent: int = Field(gt=0)
     comment: str | None = None
+    contract_document_url: str | None = None
 
 
 class ContractUpdate(BaseModel):
@@ -180,6 +182,7 @@ class ContractUpdate(BaseModel):
     adjustment_month: str | None = None
     current_rent: int | None = Field(default=None, gt=0)
     comment: str | None = None
+    contract_document_url: str | None = None
 
 
 class ContractCloseRequest(BaseModel):
@@ -201,6 +204,7 @@ class ContractDetailResponse(BaseModel):
     adjustment_month: str | None
     comment: str | None
     is_active: bool
+    contract_document_url: str | None = None
 
 
 class TenantListItem(BaseModel):

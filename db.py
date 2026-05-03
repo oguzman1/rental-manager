@@ -87,6 +87,7 @@ def init_db():
                 contract_file_path   TEXT,
                 contract_signed_at   TEXT,
                 notice_sent_at       TEXT,
+                contract_document_url TEXT,
                 created_at           TEXT    NOT NULL DEFAULT (date('now'))
             )
             """
@@ -97,6 +98,8 @@ def init_db():
         }
         if "notice_sent_at" not in existing_cols:
             conn.execute("ALTER TABLE contracts ADD COLUMN notice_sent_at TEXT")
+        if "contract_document_url" not in existing_cols:
+            conn.execute("ALTER TABLE contracts ADD COLUMN contract_document_url TEXT")
 
         conn.execute(
             """
@@ -870,7 +873,8 @@ def list_contracts() -> list[dict]:
                 c.adjustment_frequency,
                 c.notice_days,
                 c.adjustment_month,
-                c.comment
+                c.comment,
+                c.contract_document_url
             FROM contracts c
             JOIN properties p
                 ON p.id = c.property_id
@@ -899,6 +903,7 @@ def list_contracts() -> list[dict]:
             "notice_days": row[9],
             "adjustment_month": row[10],
             "comment": row[11],
+            "contract_document_url": row[12],
         }
         for row in rows
     ]
@@ -922,7 +927,8 @@ def get_contract(contract_id: int) -> dict | None:
                 c.notice_days,
                 c.adjustment_month,
                 c.comment,
-                c.is_active
+                c.is_active,
+                c.contract_document_url
             FROM contracts c
             JOIN properties p ON p.id = c.property_id
             JOIN contract_tenants ct ON ct.contract_id = c.id AND ct.is_primary = 1
@@ -951,6 +957,7 @@ def get_contract(contract_id: int) -> dict | None:
         "adjustment_month": row[11],
         "comment": row[12],
         "is_active": bool(row[13]),
+        "contract_document_url": row[14],
     }
 
 
@@ -979,8 +986,8 @@ def create_contract(data) -> int:
             """
             INSERT INTO contracts
                 (property_id, start_date, payment_day, notice_days,
-                 adjustment_frequency, adjustment_month, comment, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                 adjustment_frequency, adjustment_month, comment, contract_document_url, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
             """,
             (
                 data.property_id,
@@ -990,6 +997,7 @@ def create_contract(data) -> int:
                 data.adjustment_frequency.value,
                 data.adjustment_month,
                 data.comment,
+                data.contract_document_url,
             ),
         )
         contract_id = cursor.lastrowid
@@ -1038,6 +1046,8 @@ def update_contract(contract_id: int, data) -> bool:
             updates["adjustment_month"] = data.adjustment_month
         if "comment" in data.model_fields_set:
             updates["comment"] = data.comment
+        if "contract_document_url" in data.model_fields_set:
+            updates["contract_document_url"] = data.contract_document_url
 
         if updates:
             set_clause = ", ".join(f"{k} = ?" for k in updates)

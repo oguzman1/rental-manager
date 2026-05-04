@@ -529,3 +529,176 @@ def test_close_contract_keeps_all_paid_periods():
 
     payments = _get_payments(cid)
     assert len(payments) == 12
+
+
+# ============================================================
+# bootstrap_payment_periods_for_active_contracts
+# ============================================================
+
+def _make_rental_with_start(start: date, rent: int = 500000) -> RentalInfo:
+    return RentalInfo(
+        property_label="depto test",
+        tenant_name="Test Tenant",
+        payment_day=5,
+        current_rent=rent,
+        adjustment_frequency=AdjustmentFrequency.annual,
+        start_date=start,
+        notice_days=30,
+        adjustment_month="january",
+    )
+
+
+def _make_property_unique(rol: str) -> PropertyInfo:
+    return PropertyInfo(
+        comuna="TEST",
+        rol=rol,
+        address="Calle Test 123",
+        destination="HABITACIONAL",
+        status="occupied",
+    )
+
+
+def _clear_payments(contract_id: int) -> None:
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM payments WHERE contract_id = ?", (contract_id,))
+        conn.commit()
+
+
+def test_bootstrap_creates_historical_periods_as_paid():
+    TODAY = date(2024, 3, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99001-00001"),
+        rental=_make_rental_with_start(date(2024, 1, 1)),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+    _clear_payments(cid)
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+
+    historical = [p for p in _get_payments(cid) if p["period"] < "2024-03"]
+    assert len(historical) == 2  # 2024-01, 2024-02
+    for p in historical:
+        assert p["status"] == "paid"
+        assert p["source"] == "manual"
+        assert p["paid_amount"] == p["expected_amount"]
+        assert p["paid_at"] == p["due_date"]
+        assert p["comment"] == "Carga histórica inicial"
+
+
+def test_bootstrap_creates_operational_periods_as_pending():
+    TODAY = date(2024, 3, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99002-00001"),
+        rental=_make_rental_with_start(date(2024, 1, 1)),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+    _clear_payments(cid)
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+
+    operational = [p for p in _get_payments(cid) if p["period"] >= "2024-03"]
+    assert len(operational) == 13  # 2024-03 through 2025-03
+    for p in operational:
+        assert p["status"] == "pending"
+        assert p["source"] == "manual"
+        assert p["paid_amount"] is None
+        assert p["paid_at"] is None
+        assert p["comment"] is None
+
+
+def test_bootstrap_does_not_modify_existing_rows():
+    TODAY = date(2024, 3, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99003-00001"),
+        rental=_make_rental_with_start(date(2024, 1, 1)),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    # Set 2024-01 to a custom partial state (auto-generated, already exists)
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE payments
+            SET paid_amount = 300000, status = 'partial', comment = 'pago parcial'
+            WHERE contract_id = ? AND period = '2024-01'
+            """,
+            (cid,),
+        )
+        conn.commit()
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+
+    jan = next(p for p in _get_payments(cid) if p["period"] == "2024-01")
+    assert jan["status"] == "partial"
+    assert jan["paid_amount"] == 300000
+    assert jan["comment"] == "pago parcial"
+
+
+def test_bootstrap_is_idempotent():
+    TODAY = date(2024, 3, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99004-00001"),
+        rental=_make_rental_with_start(date(2024, 1, 1)),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+    _clear_payments(cid)
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+    count_first = len(_get_payments(cid))
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+    count_second = len(_get_payments(cid))
+
+    assert count_first == count_second
+    assert count_first == 15  # 2 historical + 13 operational
+
+
+def test_bootstrap_ignores_inactive_contracts():
+    TODAY = date(2024, 3, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99005-00001"),
+        rental=_make_rental_with_start(date(2024, 1, 1)),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    with db.get_connection() as conn:
+        conn.execute("UPDATE contracts SET is_active = 0 WHERE id = ?", (cid,))
+        conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
+        conn.commit()
+
+    db.bootstrap_payment_periods_for_active_contracts(today=TODAY)
+
+    assert len(_get_payments(cid)) == 0
+
+
+def test_bootstrap_clears_dashboard_historical_gap():
+    # Use a start_date well in the past so there are guaranteed historical gaps.
+    start_date = date(2024, 1, 1)
+    data = ManagedPropertyCreate(
+        property=_make_property_unique("99006-00001"),
+        rental=_make_rental_with_start(start_date),
+    )
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+    _clear_payments(cid)
+
+    today_ym = date.today().strftime("%Y-%m")
+
+    # Before bootstrap: dashboard shows a historical gap
+    items = db.list_dashboard_items()
+    item = next(i for i in items if i["id"] == pid)
+    assert item["actionable_payment_period"] is not None
+    assert item["actionable_payment_period"] < today_ym
+
+    db.bootstrap_payment_periods_for_active_contracts()
+
+    # After bootstrap: earliest unpaid period is current month, not historical
+    items = db.list_dashboard_items()
+    item = next(i for i in items if i["id"] == pid)
+    if item["actionable_payment_period"] is not None:
+        assert item["actionable_payment_period"] >= today_ym

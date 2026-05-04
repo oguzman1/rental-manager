@@ -1412,6 +1412,116 @@ def generate_payment_periods(
             year += 1
 
 
+def bootstrap_payment_periods_for_active_contracts(
+    today: date | None = None,
+) -> dict:
+    """Create missing payment periods for all active contracts.
+
+    Historical months (contract start through last month): inserted as paid/manual
+    with paid_amount = expected_amount and comment 'Carga histórica inicial'.
+
+    Current and future months (this month through 12 months ahead): inserted as
+    pending/manual with no paid_amount.
+
+    Existing rows are never modified. Safe to run multiple times (idempotent).
+    Inactive contracts are skipped.
+
+    Returns a summary dict with counts of contracts processed and periods inserted.
+    """
+    ref = today or date.today()
+    today_ym = ref.strftime("%Y-%m")
+
+    prev_y, prev_m = ref.year, ref.month - 1
+    if prev_m == 0:
+        prev_m, prev_y = 12, prev_y - 1
+    prev_ym = f"{prev_y}-{prev_m:02d}"
+
+    future_m_offset = ref.month - 1 + 12
+    future_y = ref.year + future_m_offset // 12
+    future_m = future_m_offset % 12 + 1
+    future_ym = f"{future_y}-{future_m:02d}"
+
+    historical_inserted = 0
+    operational_inserted = 0
+    contracts_processed = 0
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                c.id,
+                c.start_date,
+                c.payment_day,
+                (
+                    SELECT amount FROM rent_changes
+                    WHERE contract_id = c.id
+                    ORDER BY effective_from DESC, id DESC
+                    LIMIT 1
+                ) AS current_rent
+            FROM contracts c
+            WHERE c.is_active = 1
+            """
+        ).fetchall()
+
+        for contract_id, start_date_str, payment_day, current_rent in rows:
+            contracts_processed += 1
+            start_ym = start_date_str[:7]
+
+            existing = {
+                r[0]
+                for r in conn.execute(
+                    "SELECT period FROM payments WHERE contract_id = ?",
+                    (contract_id,),
+                ).fetchall()
+            }
+
+            if start_ym <= prev_ym:
+                for period in _iter_months(start_ym, prev_ym):
+                    if period in existing:
+                        continue
+                    y, m = int(period[:4]), int(period[5:7])
+                    last_day = monthrange(y, m)[1]
+                    due_date_str = f"{y}-{m:02d}-{min(payment_day, last_day):02d}"
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO payments
+                            (contract_id, period, due_date, expected_amount,
+                             paid_amount, paid_at, status, source, comment)
+                        VALUES (?, ?, ?, ?, ?, ?, 'paid', 'manual', 'Carga histórica inicial')
+                        """,
+                        (contract_id, period, due_date_str, current_rent,
+                         current_rent, due_date_str),
+                    )
+                    historical_inserted += 1
+
+            op_start_ym = today_ym if start_ym <= today_ym else start_ym
+            for period in _iter_months(op_start_ym, future_ym):
+                if period in existing:
+                    continue
+                y, m = int(period[:4]), int(period[5:7])
+                last_day = monthrange(y, m)[1]
+                due_date_str = f"{y}-{m:02d}-{min(payment_day, last_day):02d}"
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO payments
+                        (contract_id, period, due_date, expected_amount,
+                         status, source)
+                    VALUES (?, ?, ?, ?, 'pending', 'manual')
+                    """,
+                    (contract_id, period, due_date_str, current_rent),
+                )
+                operational_inserted += 1
+
+        conn.commit()
+
+    return {
+        "contracts_processed": contracts_processed,
+        "historical_inserted": historical_inserted,
+        "operational_inserted": operational_inserted,
+        "periods_inserted": historical_inserted + operational_inserted,
+    }
+
+
 def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
     """Move the excess amount from an overpaid period into the next monthly period.
 

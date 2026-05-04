@@ -88,6 +88,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
   const [overpaymentError, setOverpaymentError] = useState(null)
   const [pendingOverpaymentId, setPendingOverpaymentId] = useState(null)
+  // Keyed by payment.id → dismissed overpayment amount. Hides the prompt after Cancelar
+  // until the payment is edited and the overpayment amount changes.
+  const [dismissedOverpayments, setDismissedOverpayments] = useState({})
   // Pre-save overpayment draft: set when handleAdd detects excess before submitting
   const [pendingOverpaymentDraft, setPendingOverpaymentDraft] = useState(null)
 
@@ -310,6 +313,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         method: 'POST',
       })
       if (!res.ok) throw new Error(`Error ${res.status}`)
+      setDismissedOverpayments(prev => {
+        const next = { ...prev }
+        delete next[payment.id]
+        return next
+      })
       await loadPayments()
       await onPaymentMutation?.()
     } catch (err) {
@@ -411,7 +419,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
               <button className="btn-primary" onClick={handleConfirmOverpayment} disabled={isSubmitting}>
                 {isSubmitting ? 'Guardando…' : 'Confirmar'}
               </button>
-              <button className="btn-secondary" type="button" onClick={() => { setPendingOverpaymentDraft(null); setFormError(null) }}>
+              <button className="btn-secondary" type="button" onClick={() => { setPendingOverpaymentDraft(null); setActiveForm(null); setFormError(null) }}>
                 Cancelar
               </button>
             </div>
@@ -644,7 +652,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                           </button>
                         </td>
                       </tr>
-                      {p.overpayment > 0 && (
+                      {p.overpayment > 0 && dismissedOverpayments[p.id] !== p.overpayment && (
                         <tr className="overpayment-row">
                           <td colSpan={8} className="overpayment-cell">
                             <span className="overpayment-label">
@@ -664,7 +672,10 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                                 </button>
                                 <button
                                   className="btn-warn-sm"
-                                  onClick={() => setPendingOverpaymentId(null)}
+                                  onClick={() => {
+                                    setPendingOverpaymentId(null)
+                                    setDismissedOverpayments(prev => ({ ...prev, [p.id]: p.overpayment }))
+                                  }}
                                 >
                                   Cancelar
                                 </button>

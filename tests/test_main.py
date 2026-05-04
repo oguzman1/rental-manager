@@ -1180,6 +1180,43 @@ def test_get_managed_property_by_id_not_found():
     assert r.status_code == 404
 
 
+def test_get_managed_property_null_adjustment_month():
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "VALDIVIA",
+                "rol": "10003-00001",
+                "address": "Yungay 300",
+                "destination": "HABITACIONAL",
+                "status": "occupied",
+                "fojas": None,
+                "property_number": None,
+                "year": None,
+                "fiscal_appraisal": None,
+            },
+            "rental": {
+                "tenant_name": "Inquilino Dalcahue",
+                "payment_day": 5,
+                "property_label": "depto valdivia",
+                "current_rent": 300000,
+                "adjustment_frequency": "annual",
+                "start_date": "2022-01-01",
+                "notice_days": 30,
+                "adjustment_month": None,
+            },
+        },
+    )
+    props = client.get("/managed-properties").json()
+    pid = next(p["id"] for p in props if p["rol"] == "10003-00001")
+
+    r = client.get(f"/managed-property/{pid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["rental"] is not None
+    assert data["rental"]["adjustment_month"] is None
+
+
 # --- DELETE cascade includes payments ---
 
 def test_delete_managed_property_also_removes_payments():

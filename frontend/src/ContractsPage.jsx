@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
-import { contractDuration, formatCLP, formatFrequency } from './utils'
+import { contractDuration, formatCLP, formatFrequency, formatAmountInput, parseAmountInput } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
@@ -146,7 +146,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
               notice_days: parseInt(fNoticeDays, 10),
               adjustment_frequency: fFrequency,
               adjustment_month: fAdjMonth.trim() || null,
-              current_rent: parseInt(fRent, 10),
+              current_rent: parseAmountInput(fRent),
               comment: fComment.trim() || null,
               contract_document_url: fDocumentUrl.trim() || null,
             }),
@@ -271,12 +271,12 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                       Renta inicial *
                       <input
                         className="payment-form-input"
-                        type="number"
-                        min="1"
+                        type="text"
+                        inputMode="numeric"
                         value={fRent}
-                        onChange={(e) => setFRent(e.target.value)}
+                        onChange={(e) => setFRent(formatAmountInput(e.target.value))}
                         required
-                        placeholder="ej. 700000"
+                        placeholder="ej. 700.000"
                       />
                     </label>
                   </div>

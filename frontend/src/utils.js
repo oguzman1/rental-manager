@@ -134,6 +134,17 @@ export function formatRentSince(startDate, lastAdjDate) {
   return `${month}/${year.slice(2)}`
 }
 
+export function formatAmountInput(value) {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  if (!digits) return ''
+  return Number(digits).toLocaleString('es-CL')
+}
+
+export function parseAmountInput(value) {
+  const digits = String(value ?? '').replace(/\D/g, '')
+  return digits ? Number(digits) : 0
+}
+
 export function contractDuration(startDateStr) {
   if (!startDateStr) return null
 

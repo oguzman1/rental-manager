@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
-import { formatCLP } from './utils'
+import { formatCLP, formatAmountInput, parseAmountInput } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
@@ -68,7 +68,7 @@ function RentChangesView({ contract, onBack, onDataMutation, autoOpenForm }) {
     try {
       const body = {
         effective_from: fDate,
-        amount: parseInt(fAmount, 10),
+        amount: parseAmountInput(fAmount),
         adjustment_pct: fPct.trim() ? parseFloat(fPct) : null,
         comment: fComment.trim() || null,
       }
@@ -154,12 +154,12 @@ function RentChangesView({ contract, onBack, onDataMutation, autoOpenForm }) {
                   Monto *
                   <input
                     className="payment-form-input"
-                    type="number"
-                    min="1"
+                    type="text"
+                    inputMode="numeric"
                     value={fAmount}
-                    onChange={(e) => setFAmount(e.target.value)}
+                    onChange={(e) => setFAmount(formatAmountInput(e.target.value))}
                     required
-                    placeholder="ej. 750000"
+                    placeholder="ej. 750.000"
                   />
                 </label>
                 <label className="payment-form-label">

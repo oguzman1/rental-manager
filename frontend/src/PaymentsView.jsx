@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { PaymentBadge } from './Badge'
-import { formatCLP, formatPeriodLabel } from './utils'
+import { formatCLP, formatPeriodLabel, formatAmountInput, parseAmountInput } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
@@ -39,19 +39,6 @@ function getPrefillAmount(payment) {
     return String(Math.max(0, payment.expected_amount - payment.paid_amount))
   }
   return String(payment.expected_amount)
-}
-
-// Chilean thousands formatting: 225000 → "225.000"
-function formatAmountInput(value) {
-  const digits = String(value ?? '').replace(/\D/g, '')
-  if (!digits) return ''
-  return Number(digits).toLocaleString('es-CL')
-}
-
-// Strip dots and parse back to integer for the API
-function parseAmountInput(value) {
-  const digits = String(value ?? '').replace(/\D/g, '')
-  return digits ? Number(digits) : 0
 }
 
 // Returns the next payable period using priority:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { StatusBadge } from './Badge'
+import { formatAmountInput, parseAmountInput } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
@@ -116,7 +117,7 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
         setFPropertyLabel(r.property_label ?? '')
         setFTenantName(r.tenant_name ?? '')
         setFPaymentDay(r.payment_day != null ? String(r.payment_day) : '')
-        setFCurrentRent(r.current_rent != null ? String(r.current_rent) : '')
+        setFCurrentRent(r.current_rent != null ? formatAmountInput(r.current_rent) : '')
         setFAdjFreq(r.adjustment_frequency ?? 'annual')
         setFStartDate(r.start_date ?? '')
         setFNoticeDays(r.notice_days != null ? String(r.notice_days) : '30')
@@ -149,7 +150,7 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
         property_label: fPropertyLabel.trim(),
         tenant_name: fTenantName.trim(),
         payment_day: parseInt(fPaymentDay),
-        current_rent: parseInt(fCurrentRent),
+        current_rent: parseAmountInput(fCurrentRent),
         adjustment_frequency: fAdjFreq,
         start_date: fStartDate,
         notice_days: parseInt(fNoticeDays),
@@ -339,9 +340,9 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
                     <label className="payment-form-label">
                       Renta mensual *
                       <input
-                        className="payment-form-input" type="number" min="1"
-                        value={fCurrentRent} onChange={(e) => setFCurrentRent(e.target.value)}
-                        required placeholder="ej. 500000"
+                        className="payment-form-input" type="text" inputMode="numeric"
+                        value={fCurrentRent} onChange={(e) => setFCurrentRent(formatAmountInput(e.target.value))}
+                        required placeholder="ej. 500.000"
                       />
                     </label>
                   </div>

@@ -1215,6 +1215,7 @@ def list_tenants() -> list[dict]:
                 ON p.id = c.property_id
             LEFT JOIN rent_changes rc
                 ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+            WHERE c.id IS NOT NULL OR ct.contract_id IS NULL
             ORDER BY t.id DESC
             """
         ).fetchall()

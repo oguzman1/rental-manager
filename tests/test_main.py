@@ -1351,6 +1351,7 @@ def test_delete_tenant_not_found_returns_404():
 # --- FASE 3: Contratos CRUD ---
 
 _f3_seq = 0
+_tf_seq = 0  # sequence counter for tenant-list-filter tests
 
 
 def _setup_contract_scenario() -> tuple[int, int, int]:
@@ -1530,6 +1531,88 @@ def test_delete_tenant_with_historical_contract_returns_409():
     r = client.delete(f"/tenants/{tenant_id}")
     assert r.status_code == 409
     assert "contract" in r.json()["detail"]
+
+
+# --- Tenant list filtering: hide tenants whose only contracts are closed ---
+
+def test_list_tenants_no_contract_tenant_is_shown():
+    r = client.post("/tenants", json={"display_name": "Sin Contrato Filtro"})
+    tenant_id = r.json()["id"]
+    items = client.get("/tenants").json()
+    assert any(t["id"] == tenant_id for t in items)
+
+
+def test_list_tenants_active_contract_tenant_is_shown():
+    _, tenant_id, _ = _setup_contract_scenario()
+    items = client.get("/tenants").json()
+    assert any(t["id"] == tenant_id for t in items)
+
+
+def test_list_tenants_closed_only_contract_tenant_is_hidden():
+    _, tenant_id, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    items = client.get("/tenants").json()
+    assert not any(t["id"] == tenant_id for t in items)
+
+
+def test_list_tenants_tenant_with_active_and_closed_contract_is_shown():
+    global _tf_seq
+    _tf_seq += 1
+    _, tenant_id, contract_id_1 = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id_1}/close", json={"end_date": "2024-06-30"})
+    # Second property + active contract for the same tenant
+    rol2 = f"99001-{_tf_seq:05d}"
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "TEMUCO",
+                "rol": rol2,
+                "address": f"Calle Filtro {_tf_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+                "fojas": "100",
+                "property_number": "100",
+                "year": 2020,
+                "fiscal_appraisal": 80000000,
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop2 = next(p for p in props if p["rol"] == rol2)
+    r2 = client.post(
+        "/contracts",
+        json={
+            "property_id": prop2["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-07-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "adjustment_month": "january",
+            "current_rent": 750000,
+        },
+    )
+    assert r2.status_code == 200
+    items = client.get("/tenants").json()
+    assert any(t["id"] == tenant_id for t in items)
+
+
+def test_delete_tenant_with_closed_contract_still_returns_409():
+    _, tenant_id, contract_id = _setup_contract_scenario()
+    client.patch(f"/contracts/{contract_id}/close", json={"end_date": "2024-12-31"})
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 409
+    assert "contract" in r.json()["detail"]
+
+
+def test_delete_tenant_with_no_contract_returns_204():
+    r = client.post("/tenants", json={"display_name": "Sin Contrato Para Borrar Filtro"})
+    tenant_id = r.json()["id"]
+    r = client.delete(f"/tenants/{tenant_id}")
+    assert r.status_code == 204
+    assert r.content == b""
 
 
 def test_list_contracts_includes_notice_days_and_comment():

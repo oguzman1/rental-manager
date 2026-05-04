@@ -954,6 +954,21 @@
   margin-bottom: 12px;
 }
 
+/* Inline confirmation panel rendered inside the add/edit payment form */
+.payment-overpayment-inline {
+  background: var(--warn-bg);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-top: 8px;
+}
+
+.payment-overpayment-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warn-fg);
+  margin-bottom: 6px;
+}
+
 .btn-warn-sm {
   font-size: 12px;
   padding: 3px 10px;

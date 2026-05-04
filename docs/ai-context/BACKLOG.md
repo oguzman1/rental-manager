@@ -60,3 +60,57 @@ Tentative non-scope:
 - No Contracts work unless strictly needed.
 - No Tenants work unless strictly needed.
 - No full rent-adjustment implementation if backend/flow is not ready.
+
+---
+
+## Candidato futuro — feature/payments-cascading-overpayment-allocation
+
+**Tipo:** Payments / asignación financiera / backend + frontend UX
+**Estado:** Futuro, no incluido en `feature/payments-overpayment-confirmation-ux`
+
+### Problema
+
+Durante el PR `feature/payments-overpayment-confirmation-ux` se detectó que el flujo actual de sobrepagos solo puede abonar el excedente al período inmediatamente siguiente.
+
+Si el excedente supera lo que ese período puede absorber, se genera otro sobrepago y pueden aparecer prompts row-level amarillos después de guardar. Esto no representa el comportamiento financiero ideal cuando un pago cubre varios meses hacia adelante.
+
+### Comportamiento deseado futuro
+
+Cuando un pago genere un sobrepago suficientemente grande, el sistema debería permitir prorratear/asignar el excedente hacia períodos futuros de forma secuencial:
+
+- cubrir primero el período siguiente hasta su monto esperado pendiente
+- continuar con los períodos posteriores mientras quede excedente
+- crear períodos futuros faltantes si corresponde
+- dejar el último período como parcial si el excedente no alcanza para cubrirlo completo
+- mostrar una vista previa antes de confirmar, por ejemplo:
+  - Abril 2027: $253.750 completo
+  - Mayo 2027: $138.750 parcial
+- evitar que después de aplicar el sobrepago aparezcan nuevos prompts row-level causados por esa misma operación
+
+### Decisiones pendientes antes de implementar
+
+- Definir qué hacer si un período futuro intermedio ya está totalmente pagado:
+  - saltarlo
+  - detener la asignación
+  - pedir decisión manual
+- Definir cómo calcular el monto esperado de períodos futuros cuando existan reajustes.
+- Definir si el endpoint actual `POST /payments/{payment_id}/apply-overpayment` debe evolucionar o si conviene crear un endpoint nuevo.
+
+### Notas técnicas
+
+- Revisar `apply_overpayment_to_next_period` en `db.py`.
+- Revisar endpoint `POST /payments/{payment_id}/apply-overpayment` en `main.py`.
+- Los tests actuales no cubren el caso en que el excedente supera la capacidad del período siguiente.
+
+### Tests esperados en un PR futuro
+
+- excedente mayor a un período
+- asignación a 3+ períodos
+- creación de períodos futuros faltantes
+- período intermedio ya pagado
+- último período parcial
+- no generar un nuevo prompt row-level inmediatamente después de aplicar la asignación
+
+### Non-scope del PR actual
+
+No resolver en `feature/payments-overpayment-confirmation-ux`.

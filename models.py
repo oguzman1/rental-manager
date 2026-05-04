@@ -47,7 +47,7 @@ class RentalInfo(BaseModel):
     adjustment_frequency: AdjustmentFrequency
     start_date: date
     notice_days: int = Field(ge=0)
-    adjustment_month: str
+    adjustment_month: str | None = None
 
 
 class ManagedPropertyCreate(BaseModel):

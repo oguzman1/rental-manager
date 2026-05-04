@@ -12,6 +12,12 @@ User impact:
 Screenshot or evidence:
 ```
 
+## Recently resolved
+
+| Branch | Module | Type | Summary |
+|---|---|---|---|
+| fix/payments-overpayment-cancel-loop | PaymentsView | Bug / UX flow | Fixed overpayment cancel behavior: pre-save Cancelar now aborts the pending save flow without creating/updating a payment, and row-level Cancelar dismisses the apply-overpayment prompt for the same payment and overpayment amount without calling backend. |
+
 ## Inbox
 
 ### RM-001 — Rework Dashboard right-side action cards

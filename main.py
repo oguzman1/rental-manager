@@ -1,9 +1,12 @@
 from calendar import monthrange
-from datetime import date
+from datetime import date, datetime, timezone
 import sqlite3
+import uuid
+from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query, Response
+from fastapi import Body, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from adjustments import (
     calculate_adjustment_notice_date,
@@ -42,6 +45,7 @@ from db import (
     revert_notice_sent,
     tenant_has_any_contract,
     update_contract,
+    update_contract_document,
     update_managed_property,
     update_payment,
     update_tenant,
@@ -97,6 +101,12 @@ app.add_middleware(
 )
 
 init_db()
+
+_UPLOADS_DIR = Path("uploads/contracts")
+_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+_ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
+_MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 @app.get("/health", tags=["system"])
@@ -558,6 +568,101 @@ def update_contract_endpoint(contract_id: int, data: ContractUpdate):
     if not update_contract(contract_id, data):
         raise HTTPException(status_code=404, detail="Active contract not found.")
     return get_contract(contract_id)
+
+
+@app.post(
+    "/contracts/{contract_id}/document",
+    tags=["contracts"],
+    summary="Upload a document file for a contract",
+    response_model=ContractDetailResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Unsupported file type or file too large"},
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+async def upload_contract_document(contract_id: int, file: UploadFile = File(...)):
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    original_filename = file.filename or ""
+    ext = Path(original_filename).suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: .pdf, .doc, .docx",
+        )
+
+    content = await file.read()
+    if len(content) > _MAX_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds maximum size of 20 MB.")
+
+    old_path_str = contract.get("contract_document_path")
+
+    safe_name = f"{contract_id}_{uuid.uuid4().hex[:8]}{ext}"
+    dest = _UPLOADS_DIR / safe_name
+    dest.write_bytes(content)
+
+    mime = (file.content_type or "application/octet-stream").split(";")[0].strip()
+    uploaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    stored_path = f"uploads/contracts/{safe_name}"
+
+    try:
+        success = update_contract_document(
+            contract_id=contract_id,
+            path=stored_path,
+            filename=original_filename,
+            mime_type=mime,
+            size_bytes=len(content),
+            uploaded_at=uploaded_at,
+        )
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to update contract record.")
+
+    if not success:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    if old_path_str and old_path_str != stored_path:
+        try:
+            Path(old_path_str).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return get_contract(contract_id)
+
+
+@app.get(
+    "/contracts/{contract_id}/document",
+    tags=["contracts"],
+    summary="Download the uploaded document for a contract",
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract or document not found"},
+        403: {"model": ErrorResponse, "description": "Access denied"},
+    },
+)
+def get_contract_document(contract_id: int):
+    contract = get_contract(contract_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail="Contract not found.")
+
+    doc_path_str = contract.get("contract_document_path")
+    if not doc_path_str:
+        raise HTTPException(status_code=404, detail="No uploaded document for this contract.")
+
+    doc_path = Path(doc_path_str).resolve()
+    try:
+        doc_path.relative_to(_UPLOADS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied.")
+
+    if not doc_path.exists():
+        raise HTTPException(status_code=404, detail="Document file not found on server.")
+
+    filename = contract.get("contract_document_filename") or doc_path.name
+    mime = contract.get("contract_document_mime_type") or "application/octet-stream"
+    return FileResponse(path=str(doc_path), filename=filename, media_type=mime)
 
 
 @app.patch(

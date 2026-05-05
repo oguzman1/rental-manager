@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
 import { contractDuration, formatCLP, formatFrequency, formatAmountInput, parseAmountInput } from './utils'
 
@@ -29,6 +29,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
   const [fNoticeDays, setFNoticeDays] = useState('0')
   const [fComment, setFComment] = useState('')
   const [fDocumentUrl, setFDocumentUrl] = useState('')
+  const [fDocumentFile, setFDocumentFile] = useState(null)
+  const [fCurrentDocumentFilename, setFCurrentDocumentFilename] = useState(null)
+  const fileInputRef = useRef(null)
 
   async function loadContracts() {
     setIsLoading(true)
@@ -72,6 +75,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
     setFNoticeDays('0')
     setFComment('')
     setFDocumentUrl('')
+    setFDocumentFile(null)
+    setFCurrentDocumentFilename(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
     setFormError(null)
   }
 
@@ -106,6 +112,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
       setFAdjMonth(data.adjustment_month ?? '')
       setFComment(data.comment ?? '')
       setFDocumentUrl(data.contract_document_url ?? '')
+      setFCurrentDocumentFilename(data.contract_document_filename ?? null)
     } catch (err) {
       setFormError(`Error al cargar contrato: ${err.message}`)
     }
@@ -157,6 +164,23 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
         setFormError(body.detail ?? `Error ${res.status}`)
         return
       }
+
+      if (isEdit && fDocumentFile) {
+        const formData = new FormData()
+        formData.append('file', fDocumentFile)
+        const uploadRes = await fetch(`${API_BASE}/contracts/${activeForm.id}/document`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!uploadRes.ok) {
+          const body = await uploadRes.json()
+          setFormError(body.detail ?? `Error al subir el documento: ${uploadRes.status}`)
+          await loadContracts()
+          await onDataMutation?.()
+          return
+        }
+      }
+
       setActiveForm(null)
       await loadContracts()
       await onDataMutation?.()
@@ -360,6 +384,26 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                 </label>
               </div>
 
+              {activeForm?.type === 'edit' && (
+                <div className="payment-form-row" style={{ marginTop: 10 }}>
+                  <label className="payment-form-label">
+                    Subir documento de contrato
+                    <input
+                      ref={fileInputRef}
+                      className="payment-form-input"
+                      type="file"
+                      accept=".pdf,.doc,.docx"
+                      onChange={(e) => setFDocumentFile(e.target.files?.[0] ?? null)}
+                    />
+                    <span style={{ fontSize: '0.8rem', color: 'var(--ink-3)' }}>
+                      {fCurrentDocumentFilename
+                        ? `Actual: ${fCurrentDocumentFilename} · reemplazar con nuevo archivo`
+                        : 'PDF, DOC o DOCX · máx. 20 MB'}
+                    </span>
+                  </label>
+                </div>
+              )}
+
               <div className="payment-form-actions" style={{ marginTop: 20 }}>
                 <button className="btn-primary" type="submit" disabled={isSubmitting}>
                   {isSubmitting
@@ -448,7 +492,21 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               >
                                 Cerrar contrato
                               </button>
-                              {item.contract_document_url && (
+                              {item.contract_document_path && (
+                                <>
+                                  {' '}
+                                  <a
+                                    className="btn-payments"
+                                    href={`${API_BASE}/contracts/${item.id}/document`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    Ver contrato
+                                  </a>
+                                </>
+                              )}
+                              {!item.contract_document_path && item.contract_document_url && (
                                 <>
                                   {' '}
                                   {/^(https?|file):\/\//i.test(item.contract_document_url) ? (

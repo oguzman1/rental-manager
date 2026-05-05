@@ -161,6 +161,11 @@ class ContractListItem(BaseModel):
     adjustment_month: str | None = None
     comment: str | None = None
     contract_document_url: str | None = None
+    contract_document_path: str | None = None
+    contract_document_filename: str | None = None
+    contract_document_mime_type: str | None = None
+    contract_document_size_bytes: int | None = None
+    contract_document_uploaded_at: str | None = None
 
 
 class ContractCreate(BaseModel):
@@ -206,6 +211,11 @@ class ContractDetailResponse(BaseModel):
     comment: str | None
     is_active: bool
     contract_document_url: str | None = None
+    contract_document_path: str | None = None
+    contract_document_filename: str | None = None
+    contract_document_mime_type: str | None = None
+    contract_document_size_bytes: int | None = None
+    contract_document_uploaded_at: str | None = None
 
 
 class TenantListItem(BaseModel):

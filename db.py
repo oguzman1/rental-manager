@@ -100,6 +100,15 @@ def init_db():
             conn.execute("ALTER TABLE contracts ADD COLUMN notice_sent_at TEXT")
         if "contract_document_url" not in existing_cols:
             conn.execute("ALTER TABLE contracts ADD COLUMN contract_document_url TEXT")
+        for col, col_type in [
+            ("contract_document_path", "TEXT"),
+            ("contract_document_filename", "TEXT"),
+            ("contract_document_mime_type", "TEXT"),
+            ("contract_document_size_bytes", "INTEGER"),
+            ("contract_document_uploaded_at", "TEXT"),
+        ]:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE contracts ADD COLUMN {col} {col_type}")
 
         conn.execute(
             """
@@ -879,7 +888,12 @@ def list_contracts() -> list[dict]:
                 c.notice_days,
                 c.adjustment_month,
                 c.comment,
-                c.contract_document_url
+                c.contract_document_url,
+                c.contract_document_path,
+                c.contract_document_filename,
+                c.contract_document_mime_type,
+                c.contract_document_size_bytes,
+                c.contract_document_uploaded_at
             FROM contracts c
             JOIN properties p
                 ON p.id = c.property_id
@@ -909,6 +923,11 @@ def list_contracts() -> list[dict]:
             "adjustment_month": row[10],
             "comment": row[11],
             "contract_document_url": row[12],
+            "contract_document_path": row[13],
+            "contract_document_filename": row[14],
+            "contract_document_mime_type": row[15],
+            "contract_document_size_bytes": row[16],
+            "contract_document_uploaded_at": row[17],
         }
         for row in rows
     ]
@@ -933,7 +952,12 @@ def get_contract(contract_id: int) -> dict | None:
                 c.adjustment_month,
                 c.comment,
                 c.is_active,
-                c.contract_document_url
+                c.contract_document_url,
+                c.contract_document_path,
+                c.contract_document_filename,
+                c.contract_document_mime_type,
+                c.contract_document_size_bytes,
+                c.contract_document_uploaded_at
             FROM contracts c
             JOIN properties p ON p.id = c.property_id
             JOIN contract_tenants ct ON ct.contract_id = c.id AND ct.is_primary = 1
@@ -963,6 +987,11 @@ def get_contract(contract_id: int) -> dict | None:
         "comment": row[12],
         "is_active": bool(row[13]),
         "contract_document_url": row[14],
+        "contract_document_path": row[15],
+        "contract_document_filename": row[16],
+        "contract_document_mime_type": row[17],
+        "contract_document_size_bytes": row[18],
+        "contract_document_uploaded_at": row[19],
     }
 
 
@@ -1067,6 +1096,37 @@ def update_contract(contract_id: int, data) -> bool:
                 (contract_id, date.today().isoformat(), data.current_rent),
             )
 
+        conn.commit()
+        return True
+
+
+def update_contract_document(
+    contract_id: int,
+    path: str,
+    filename: str,
+    mime_type: str,
+    size_bytes: int,
+    uploaded_at: str,
+) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE id = ? AND is_active = 1",
+            (contract_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            """
+            UPDATE contracts SET
+                contract_document_path = ?,
+                contract_document_filename = ?,
+                contract_document_mime_type = ?,
+                contract_document_size_bytes = ?,
+                contract_document_uploaded_at = ?
+            WHERE id = ?
+            """,
+            (path, filename, mime_type, size_bytes, uploaded_at, contract_id),
+        )
         conn.commit()
         return True
 

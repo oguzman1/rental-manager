@@ -1695,6 +1695,151 @@ def test_contract_document_url_in_list():
     assert contract["contract_document_url"] == url
 
 
+# --- Contract document file upload ---
+
+import io
+from pathlib import Path as _Path
+
+_UPLOAD_DIR = _Path("uploads/contracts")
+
+
+def _contract_upload_files(contract_id: int) -> list:
+    if not _UPLOAD_DIR.exists():
+        return []
+    return list(_UPLOAD_DIR.glob(f"{contract_id}_*"))
+
+
+def test_upload_valid_pdf():
+    _, _, contract_id = _setup_contract_scenario()
+    pdf_bytes = b"%PDF-1.4 fake pdf content for test"
+    r = client.post(
+        f"/contracts/{contract_id}/document",
+        files={"file": ("contrato.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["contract_document_filename"] == "contrato.pdf"
+    assert data["contract_document_mime_type"] == "application/pdf"
+    assert data["contract_document_size_bytes"] == len(pdf_bytes)
+    assert data["contract_document_path"] is not None
+    assert data["contract_document_uploaded_at"] is not None
+    for f in _contract_upload_files(contract_id):
+        f.unlink(missing_ok=True)
+
+
+def test_upload_doc_and_docx_extensions():
+    _, _, contract_id = _setup_contract_scenario()
+    for ext, mime in [
+        (".doc", "application/msword"),
+        (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    ]:
+        r = client.post(
+            f"/contracts/{contract_id}/document",
+            files={"file": (f"contrato{ext}", io.BytesIO(b"fake word content"), mime)},
+        )
+        assert r.status_code == 200, f"Expected 200 for {ext}, got {r.status_code}: {r.text}"
+        for f in _contract_upload_files(contract_id):
+            f.unlink(missing_ok=True)
+
+
+def test_download_uploaded_document():
+    _, _, contract_id = _setup_contract_scenario()
+    pdf_bytes = b"%PDF-1.4 downloadable test content"
+    client.post(
+        f"/contracts/{contract_id}/document",
+        files={"file": ("test.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    r = client.get(f"/contracts/{contract_id}/document")
+    assert r.status_code == 200
+    assert r.content == pdf_bytes
+    for f in _contract_upload_files(contract_id):
+        f.unlink(missing_ok=True)
+
+
+def test_upload_rejects_unsupported_extension():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.post(
+        f"/contracts/{contract_id}/document",
+        files={"file": ("malware.exe", io.BytesIO(b"bad content"), "application/octet-stream")},
+    )
+    assert r.status_code == 400
+    assert "Unsupported" in r.json()["detail"]
+
+
+def test_upload_nonexistent_contract_returns_404():
+    r = client.post(
+        "/contracts/99999/document",
+        files={"file": ("contract.pdf", io.BytesIO(b"%PDF fake"), "application/pdf")},
+    )
+    assert r.status_code == 404
+
+
+def test_contract_detail_includes_document_metadata_fields():
+    _, _, contract_id = _setup_contract_scenario()
+    r = client.get(f"/contracts/{contract_id}")
+    assert r.status_code == 200
+    data = r.json()
+    for field in [
+        "contract_document_path",
+        "contract_document_filename",
+        "contract_document_mime_type",
+        "contract_document_size_bytes",
+        "contract_document_uploaded_at",
+    ]:
+        assert field in data, f"Missing field: {field}"
+    assert data["contract_document_path"] is None
+    assert data["contract_document_filename"] is None
+
+
+def test_contract_list_includes_document_metadata_fields():
+    _, _, contract_id = _setup_contract_scenario()
+    contracts = client.get("/contracts").json()
+    contract = next((c for c in contracts if c["id"] == contract_id), None)
+    assert contract is not None
+    assert "contract_document_path" in contract
+    assert "contract_document_filename" in contract
+
+
+def test_existing_contract_document_url_still_works():
+    _, _, contract_id = _setup_contract_scenario()
+    url = "https://drive.google.com/file/d/test-compat-check"
+    r = client.patch(f"/contracts/{contract_id}", json={"contract_document_url": url})
+    assert r.status_code == 200
+    assert r.json()["contract_document_url"] == url
+    r2 = client.get(f"/contracts/{contract_id}")
+    assert r2.json()["contract_document_url"] == url
+    assert r2.json()["contract_document_path"] is None
+
+
+def test_replace_document_updates_metadata_and_removes_old_file():
+    _, _, contract_id = _setup_contract_scenario()
+
+    r1 = client.post(
+        f"/contracts/{contract_id}/document",
+        files={"file": ("first.pdf", io.BytesIO(b"%PDF first version"), "application/pdf")},
+    )
+    assert r1.status_code == 200
+    first_path = r1.json()["contract_document_path"]
+    assert first_path is not None
+
+    r2 = client.post(
+        f"/contracts/{contract_id}/document",
+        files={"file": ("second.pdf", io.BytesIO(b"%PDF second version"), "application/pdf")},
+    )
+    assert r2.status_code == 200
+    second_path = r2.json()["contract_document_path"]
+
+    assert second_path != first_path
+    assert r2.json()["contract_document_filename"] == "second.pdf"
+    assert not _Path(first_path).exists(), "Old file should have been deleted after replacement"
+
+    r3 = client.get(f"/contracts/{contract_id}")
+    assert r3.json()["contract_document_path"] == second_path
+
+    for f in _contract_upload_files(contract_id):
+        f.unlink(missing_ok=True)
+
+
 # --- FASE 4: Reajustes / rent_changes ---
 
 def test_rent_adjustments_include_contract_id():

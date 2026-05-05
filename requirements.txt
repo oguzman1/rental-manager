@@ -12,6 +12,7 @@ iniconfig==2.3.0
 packaging==26.1
 pluggy==1.6.0
 pydantic==2.12.5
+python-multipart==0.0.27
 pydantic_core==2.41.5
 Pygments==2.20.0
 pytest==9.0.3

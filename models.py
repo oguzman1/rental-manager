@@ -139,6 +139,7 @@ class DashboardItem(BaseModel):
     actionable_payment_period: str | None = None
     actionable_payment_status: PaymentStatus | None = None
     actionable_payment_amount: int | None = None
+    actionable_payment_paid_amount: int | None = None
     contract_id: int | None = None
     due_adjustment_date: date | None = None
     notice_sent_at: date | None = None

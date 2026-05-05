@@ -712,6 +712,7 @@ def list_dashboard_items() -> list[dict]:
                 ap.actionable_payment_period,
                 ap.actionable_payment_status,
                 ap.actionable_payment_amount,
+                ap.actionable_payment_paid_amount,
                 c.notice_sent_at,
                 c.notice_days,
                 c.id                    AS contract_id
@@ -765,7 +766,8 @@ def list_dashboard_items() -> list[dict]:
                         WHEN COALESCE(p1.paid_amount, 0) = 0 THEN 'pending'
                         ELSE                                      'partial'
                     END                AS actionable_payment_status,
-                    p1.expected_amount AS actionable_payment_amount
+                    p1.expected_amount AS actionable_payment_amount,
+                    p1.paid_amount     AS actionable_payment_paid_amount
                 FROM payments p1
                 INNER JOIN (
                     SELECT contract_id, MIN(period) AS min_period
@@ -810,6 +812,7 @@ def list_dashboard_items() -> list[dict]:
         actionable_period = row["actionable_payment_period"]
         actionable_status = row["actionable_payment_status"]
         actionable_amount = row["actionable_payment_amount"]
+        actionable_paid   = row["actionable_payment_paid_amount"]
 
         contract_id     = row["contract_id"]
         start_date_str  = row["start_date"]
@@ -830,6 +833,7 @@ def list_dashboard_items() -> list[dict]:
                     actionable_period = virtual_period
                     actionable_status = "pending"
                     actionable_amount = current_rent
+                    actionable_paid   = None
 
         result.append({
             "id":                     row["id"],
@@ -847,9 +851,10 @@ def list_dashboard_items() -> list[dict]:
             "payment_status":         payment_status,
             "period_amount":              row["period_amount"],
             "latest_period":              row["latest_period"],
-            "actionable_payment_period":  actionable_period,
-            "actionable_payment_status":  actionable_status,
-            "actionable_payment_amount":  actionable_amount,
+            "actionable_payment_period":       actionable_period,
+            "actionable_payment_status":       actionable_status,
+            "actionable_payment_amount":       actionable_amount,
+            "actionable_payment_paid_amount":  actionable_paid,
             "notice_sent_at":             row["notice_sent_at"],
             "notice_days":                row["notice_days"],
             "contract_id":                contract_id,

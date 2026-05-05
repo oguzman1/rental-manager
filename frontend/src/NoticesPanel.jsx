@@ -65,10 +65,17 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
 }
 
 function PaymentCard({ item, onClick }) {
-  const amount = item.actionable_payment_amount ?? item.current_rent
-  const amountText = amount != null
-    ? formatCLP(amount) + (item.paymentState === 'partial' ? ' esperado' : '')
-    : null
+  const expected = item.actionable_payment_amount ?? item.current_rent
+  let amountText = null
+  if (expected != null) {
+    if (item.paymentState === 'partial') {
+      const paid    = item.actionable_payment_paid_amount ?? 0
+      const missing = expected - paid
+      amountText = `Faltan ${formatCLP(missing)} de ${formatCLP(expected)}`
+    } else {
+      amountText = `${formatCLP(expected)} pendiente`
+    }
+  }
 
   const title      = formatRentPeriod(item.actionable_payment_period)
   const meta       = [item.property_label ?? item.rol, amountText].filter(Boolean).join(' · ')

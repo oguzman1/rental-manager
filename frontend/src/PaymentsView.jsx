@@ -25,8 +25,7 @@ function addOneMonth(period) {
 
 function isFullyPaid(payment) {
   if (!payment) return false
-  if (payment.paid_amount == null || payment.expected_amount == null) return false
-  return payment.paid_amount >= payment.expected_amount
+  return payment.status === 'paid'
 }
 
 // Returns the amount to prefill in "Agregar pago":
@@ -36,8 +35,9 @@ function isFullyPaid(payment) {
 function getPrefillAmount(payment) {
   if (!payment) return ''
   if (payment.status === 'paid') return ''
-  if (payment.status === 'partial' && payment.paid_amount != null) {
-    return String(Math.max(0, payment.expected_amount - payment.paid_amount))
+  if (payment.status === 'partial') {
+    const recognized = payment.recognized_amount ?? payment.paid_amount ?? 0
+    return String(Math.max(0, payment.expected_amount - recognized))
   }
   return String(payment.expected_amount)
 }
@@ -78,12 +78,18 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [formAmount, setFormAmount] = useState('')
   const [formDate, setFormDate] = useState(todayLocal())
   const [formNote, setFormNote] = useState('')
+  const [formBrokerageFee, setFormBrokerageFee] = useState('')
+  const [formRepairDiscount, setFormRepairDiscount] = useState('')
+  const [formOtherDiscount, setFormOtherDiscount] = useState('')
 
   // Edit form
   const [editPayment, setEditPayment] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editDate, setEditDate] = useState('')
   const [editNote, setEditNote] = useState('')
+  const [editBrokerageFee, setEditBrokerageFee] = useState('')
+  const [editRepairDiscount, setEditRepairDiscount] = useState('')
+  const [editOtherDiscount, setEditOtherDiscount] = useState('')
 
   // Overpayment
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
@@ -156,6 +162,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   })()
 
   function openAdd() {
+    setFormBrokerageFee('')
+    setFormRepairDiscount('')
+    setFormOtherDiscount('')
     if (payments.length === 0) {
       setFormPeriod('')
       setFormUseCustom(true)
@@ -198,6 +207,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       return
     }
     setFormPeriod(value)
+    setFormBrokerageFee('')
+    setFormRepairDiscount('')
+    setFormOtherDiscount('')
     const p = payments.find(py => py.period === value)
     if (p) {
       setFormAmount(formatAmountInput(getPrefillAmount(p)))
@@ -214,6 +226,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     setEditAmount(formatAmountInput(payment.paid_amount ?? payment.expected_amount))
     setEditDate(payment.paid_at ?? todayLocal())
     setEditNote(payment.comment ?? '')
+    setEditBrokerageFee(payment.brokerage_fee ? formatAmountInput(payment.brokerage_fee) : '')
+    setEditRepairDiscount(payment.repair_discount ? formatAmountInput(payment.repair_discount) : '')
+    setEditOtherDiscount(payment.other_discount ? formatAmountInput(payment.other_discount) : '')
     setFormError(null)
     setActiveForm('edit')
   }
@@ -277,6 +292,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_amount: amount || null,
             paid_at: formDate || null,
             comment: formNote || null,
+            brokerage_fee: formBrokerageFee !== '' ? parseAmountInput(formBrokerageFee) : 0,
+            repair_discount: formRepairDiscount !== '' ? parseAmountInput(formRepairDiscount) : 0,
+            other_discount: formOtherDiscount !== '' ? parseAmountInput(formOtherDiscount) : 0,
           }),
         })
         if (res.status === 409) {
@@ -329,12 +347,18 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       if (editAmount !== '') body.paid_amount = newTotal
       if (editDate !== '') body.paid_at = editDate
       if (editNote !== '') body.comment = editNote
+      body.brokerage_fee = editBrokerageFee !== '' ? parseAmountInput(editBrokerageFee) : 0
+      body.repair_discount = editRepairDiscount !== '' ? parseAmountInput(editRepairDiscount) : 0
+      body.other_discount = editOtherDiscount !== '' ? parseAmountInput(editOtherDiscount) : 0
       const res = await fetch(`${API_BASE}/payments/${editPayment.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(`Error ${res.status}`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        throw new Error(errData?.detail ?? `Error ${res.status}`)
+      }
       setActiveForm(null)
       await loadPayments()
       await onPaymentMutation?.()
@@ -451,6 +475,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   }
 
   const periodOptions = [...payments].sort((a, b) => a.period.localeCompare(b.period))
+  const addFormTargetPeriod = formUseCustom ? formCustomPeriod : formPeriod
+  const addFormIsNewRow = !payments.some(p => p.period === addFormTargetPeriod)
 
   // Build the inline confirmation panel JSX once, shared by add and edit forms.
   let overpaymentPanel = null
@@ -470,7 +496,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     const fullyPaidBlocked = isFullyPaid(nextPayment)
     const nextRemainingCapacity = nextPayment == null
       ? (contract.current_rent ?? 0)
-      : Math.max(0, (nextPayment.expected_amount ?? 0) - (nextPayment.paid_amount ?? 0))
+      : Math.max(0, (nextPayment.expected_amount ?? 0) - (nextPayment.recognized_amount ?? nextPayment.paid_amount ?? 0))
     const overflowBlocked = overpaymentAmount > nextRemainingCapacity
     const nextBlocked = fullyPaidBlocked || overflowBlocked
 
@@ -700,6 +726,46 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   disabled={!!pendingOverpaymentDraft}
                 />
               </label>
+              {addFormIsNewRow && (
+                <>
+                  <label className="payment-form-label">
+                    Honorarios corredora
+                    <input
+                      className="payment-form-input"
+                      type="text"
+                      inputMode="numeric"
+                      value={formBrokerageFee}
+                      onChange={e => setFormBrokerageFee(formatAmountInput(e.target.value))}
+                      placeholder="0"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                  </label>
+                  <label className="payment-form-label">
+                    Descuento reparación
+                    <input
+                      className="payment-form-input"
+                      type="text"
+                      inputMode="numeric"
+                      value={formRepairDiscount}
+                      onChange={e => setFormRepairDiscount(formatAmountInput(e.target.value))}
+                      placeholder="0"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                  </label>
+                  <label className="payment-form-label">
+                    Otro descuento
+                    <input
+                      className="payment-form-input"
+                      type="text"
+                      inputMode="numeric"
+                      value={formOtherDiscount}
+                      onChange={e => setFormOtherDiscount(formatAmountInput(e.target.value))}
+                      placeholder="0"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                  </label>
+                </>
+              )}
               {!pendingOverpaymentDraft && (
                 <div className="payment-form-actions">
                   <button className="btn-primary" type="submit" disabled={isSubmitting}>
@@ -758,6 +824,42 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   value={editNote}
                   onChange={e => setEditNote(e.target.value)}
                   placeholder="opcional"
+                  disabled={!!pendingOverpaymentDraft}
+                />
+              </label>
+              <label className="payment-form-label">
+                Honorarios corredora
+                <input
+                  className="payment-form-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={editBrokerageFee}
+                  onChange={e => setEditBrokerageFee(formatAmountInput(e.target.value))}
+                  placeholder="0"
+                  disabled={!!pendingOverpaymentDraft}
+                />
+              </label>
+              <label className="payment-form-label">
+                Descuento reparación
+                <input
+                  className="payment-form-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={editRepairDiscount}
+                  onChange={e => setEditRepairDiscount(formatAmountInput(e.target.value))}
+                  placeholder="0"
+                  disabled={!!pendingOverpaymentDraft}
+                />
+              </label>
+              <label className="payment-form-label">
+                Otro descuento
+                <input
+                  className="payment-form-input"
+                  type="text"
+                  inputMode="numeric"
+                  value={editOtherDiscount}
+                  onChange={e => setEditOtherDiscount(formatAmountInput(e.target.value))}
+                  placeholder="0"
                   disabled={!!pendingOverpaymentDraft}
                 />
               </label>
@@ -833,7 +935,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                     const rowIsBlocked = isFullyPaid(rowNextPayment)
                     const rowNextRemainingCapacity = rowNextPayment == null
                       ? (contract.current_rent ?? 0)
-                      : Math.max(0, (rowNextPayment.expected_amount ?? 0) - (rowNextPayment.paid_amount ?? 0))
+                      : Math.max(0, (rowNextPayment.expected_amount ?? 0) - (rowNextPayment.recognized_amount ?? rowNextPayment.paid_amount ?? 0))
                     const rowOverflowBlocked = p.overpayment > rowNextRemainingCapacity
                     return (
                       <Fragment key={p.id}>
@@ -845,6 +947,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                             {p.paid_amount != null
                               ? formatCLP(p.paid_amount)
                               : <span className="text-muted">—</span>}
+                            {(p.brokerage_fee + p.repair_discount + p.other_discount) > 0 && (
+                              <span className="text-muted" style={{ fontSize: '0.75em', display: 'block' }}>
+                                + {formatCLP(p.brokerage_fee + p.repair_discount + p.other_discount)} ded.
+                              </span>
+                            )}
                           </td>
                           <td className="td td-mono td-muted">
                             {p.paid_at ?? <span className="text-muted">—</span>}

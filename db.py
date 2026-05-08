@@ -174,6 +174,17 @@ def init_db():
             """
         )
 
+        payment_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(payments)").fetchall()
+        }
+        for col, col_type in [
+            ("brokerage_fee",   "INTEGER NOT NULL DEFAULT 0"),
+            ("repair_discount", "INTEGER NOT NULL DEFAULT 0"),
+            ("other_discount",  "INTEGER NOT NULL DEFAULT 0"),
+        ]:
+            if col not in payment_cols:
+                conn.execute(f"ALTER TABLE payments ADD COLUMN {col} {col_type}")
+
         conn.commit()
 
 
@@ -722,6 +733,7 @@ def list_dashboard_items() -> list[dict]:
                 ap.actionable_payment_status,
                 ap.actionable_payment_amount,
                 ap.actionable_payment_paid_amount,
+                ap.actionable_payment_recognized_amount,
                 c.notice_sent_at,
                 c.notice_days,
                 c.id                    AS contract_id
@@ -738,9 +750,9 @@ def list_dashboard_items() -> list[dict]:
                 SELECT
                     contract_id,
                     CASE
-                        WHEN COALESCE(paid_amount, 0) >= expected_amount THEN 'paid'
-                        WHEN COALESCE(paid_amount, 0) > 0               THEN 'partial'
-                        ELSE                                                  'pending'
+                        WHEN COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount >= expected_amount THEN 'paid'
+                        WHEN COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount > 0               THEN 'partial'
+                        ELSE                                                                                                     'pending'
                     END AS status
                 FROM payments
                 WHERE period = strftime('%Y-%m', 'now')
@@ -748,8 +760,8 @@ def list_dashboard_items() -> list[dict]:
             LEFT JOIN (
                 SELECT
                     contract_id,
-                    COUNT(*)                                         AS total_exigibles,
-                    SUM(expected_amount - COALESCE(paid_amount, 0)) AS saldo_pendiente
+                    COUNT(*)                                                                                            AS total_exigibles,
+                    SUM(expected_amount - COALESCE(paid_amount, 0) - brokerage_fee - repair_discount - other_discount) AS saldo_pendiente
                 FROM payments
                 WHERE period <= strftime('%Y-%m', 'now')
                 GROUP BY contract_id
@@ -772,17 +784,19 @@ def list_dashboard_items() -> list[dict]:
                     p1.contract_id,
                     p1.period          AS actionable_payment_period,
                     CASE
-                        WHEN COALESCE(p1.paid_amount, 0) = 0 THEN 'pending'
-                        ELSE                                      'partial'
+                        WHEN COALESCE(p1.paid_amount, 0) + p1.brokerage_fee + p1.repair_discount + p1.other_discount = 0 THEN 'pending'
+                        ELSE 'partial'
                     END                AS actionable_payment_status,
                     p1.expected_amount AS actionable_payment_amount,
-                    p1.paid_amount     AS actionable_payment_paid_amount
+                    p1.paid_amount     AS actionable_payment_paid_amount,
+                    COALESCE(p1.paid_amount, 0) + p1.brokerage_fee + p1.repair_discount + p1.other_discount
+                                       AS actionable_payment_recognized_amount
                 FROM payments p1
                 INNER JOIN (
                     SELECT contract_id, MIN(period) AS min_period
                     FROM   payments
                     WHERE  period <= strftime('%Y-%m', 'now')
-                      AND  COALESCE(paid_amount, 0) < expected_amount
+                      AND  COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount < expected_amount
                     GROUP BY contract_id
                 ) p3 ON p1.contract_id = p3.contract_id
                      AND p1.period      = p3.min_period
@@ -818,10 +832,11 @@ def list_dashboard_items() -> list[dict]:
         else:
             payment_status = "outstanding_balance"
 
-        actionable_period = row["actionable_payment_period"]
-        actionable_status = row["actionable_payment_status"]
-        actionable_amount = row["actionable_payment_amount"]
-        actionable_paid   = row["actionable_payment_paid_amount"]
+        actionable_period     = row["actionable_payment_period"]
+        actionable_status     = row["actionable_payment_status"]
+        actionable_amount     = row["actionable_payment_amount"]
+        actionable_paid       = row["actionable_payment_paid_amount"]
+        actionable_recognized = row["actionable_payment_recognized_amount"]
 
         contract_id     = row["contract_id"]
         start_date_str  = row["start_date"]
@@ -839,10 +854,11 @@ def list_dashboard_items() -> list[dict]:
                 if virtual_period is not None and (
                     actionable_period is None or virtual_period < actionable_period
                 ):
-                    actionable_period = virtual_period
-                    actionable_status = "pending"
-                    actionable_amount = current_rent
-                    actionable_paid   = None
+                    actionable_period     = virtual_period
+                    actionable_status     = "pending"
+                    actionable_amount     = current_rent
+                    actionable_paid       = None
+                    actionable_recognized = None
 
         result.append({
             "id":                     row["id"],
@@ -863,7 +879,8 @@ def list_dashboard_items() -> list[dict]:
             "actionable_payment_period":       actionable_period,
             "actionable_payment_status":       actionable_status,
             "actionable_payment_amount":       actionable_amount,
-            "actionable_payment_paid_amount":  actionable_paid,
+            "actionable_payment_paid_amount":        actionable_paid,
+            "actionable_payment_recognized_amount":  actionable_recognized,
             "notice_sent_at":             row["notice_sent_at"],
             "notice_days":                row["notice_days"],
             "contract_id":                contract_id,
@@ -1397,15 +1414,20 @@ def insert_payment(
     paid_amount: int | None = None,
     paid_at: str | None = None,
     status: str = "pending",
+    brokerage_fee: int = 0,
+    repair_discount: int = 0,
+    other_discount: int = 0,
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO payments
-                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment,
+                 brokerage_fee, repair_discount, other_discount)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment),
+            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment,
+             brokerage_fee, repair_discount, other_discount),
         )
         conn.commit()
         return cursor.lastrowid
@@ -1414,6 +1436,10 @@ def insert_payment(
 def _payment_row_to_dict(row) -> dict:
     paid = row[5]
     expected = row[4]
+    brokerage_fee = row[11]
+    repair_discount = row[12]
+    other_discount = row[13]
+    recognized = (paid or 0) + brokerage_fee + repair_discount + other_discount
     overpayment = max(0, paid - expected) if paid is not None else 0
     return {
         "id": row[0],
@@ -1427,6 +1453,10 @@ def _payment_row_to_dict(row) -> dict:
         "source": row[8],
         "comment": row[9],
         "created_at": row[10],
+        "brokerage_fee": brokerage_fee,
+        "repair_discount": repair_discount,
+        "other_discount": other_discount,
+        "recognized_amount": recognized,
         "overpayment": overpayment,
     }
 
@@ -1602,6 +1632,14 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
 
         current = _payment_row_to_dict(row)
         if current["overpayment"] <= 0:
+            deductions = (
+                current["brokerage_fee"] + current["repair_discount"] + current["other_discount"]
+            )
+            if deductions > 0 and current["recognized_amount"] >= current["expected_amount"]:
+                raise ValueError(
+                    "No cash overpayment to transfer. "
+                    "This period is covered by deductions, not a cash surplus."
+                )
             raise ValueError("No overpayment to apply.")
 
         excess = current["overpayment"]
@@ -1722,15 +1760,20 @@ def update_payment(
     paid_at: str | None,
     status: str,
     comment: str | None,
+    brokerage_fee: int = 0,
+    repair_discount: int = 0,
+    other_discount: int = 0,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             """
             UPDATE payments
-            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
+            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?,
+                brokerage_fee = ?, repair_discount = ?, other_discount = ?
             WHERE id = ?
             """,
-            (paid_amount, paid_at, status, comment, payment_id),
+            (paid_amount, paid_at, status, comment,
+             brokerage_fee, repair_discount, other_discount, payment_id),
         )
         conn.commit()
 

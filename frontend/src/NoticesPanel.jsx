@@ -69,8 +69,8 @@ function PaymentCard({ item, onClick }) {
   let amountText = null
   if (expected != null) {
     if (item.paymentState === 'partial') {
-      const paid    = item.actionable_payment_paid_amount ?? 0
-      const missing = expected - paid
+      const recognized = item.actionable_payment_recognized_amount ?? item.actionable_payment_paid_amount ?? 0
+      const missing    = expected - recognized
       amountText = `Faltan ${formatCLP(missing)} de ${formatCLP(expected)}`
     } else {
       amountText = `${formatCLP(expected)} pendiente`

@@ -140,6 +140,7 @@ class DashboardItem(BaseModel):
     actionable_payment_status: PaymentStatus | None = None
     actionable_payment_amount: int | None = None
     actionable_payment_paid_amount: int | None = None
+    actionable_payment_recognized_amount: int | None = None
     contract_id: int | None = None
     due_adjustment_date: date | None = None
     notice_sent_at: date | None = None
@@ -248,6 +249,9 @@ class PaymentCreate(BaseModel):
     paid_amount: int | None = Field(default=None, ge=0)
     paid_at: date | None = None
     comment: str | None = None
+    brokerage_fee: int = Field(default=0, ge=0)
+    repair_discount: int = Field(default=0, ge=0)
+    other_discount: int = Field(default=0, ge=0)
 
     @field_validator("period")
     @classmethod
@@ -261,6 +265,9 @@ class PaymentUpdate(BaseModel):
     paid_amount: int | None = None
     paid_at: date | None = None
     comment: str | None = None
+    brokerage_fee: int | None = Field(default=None, ge=0)
+    repair_discount: int | None = Field(default=None, ge=0)
+    other_discount: int | None = Field(default=None, ge=0)
 
 
 class PaymentResponse(BaseModel):
@@ -275,6 +282,10 @@ class PaymentResponse(BaseModel):
     source: PaymentSource
     comment: str | None = None
     created_at: date
+    brokerage_fee: int = 0
+    repair_discount: int = 0
+    other_discount: int = 0
+    recognized_amount: int = 0
     overpayment: int = 0
 
 

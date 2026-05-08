@@ -262,6 +262,8 @@ def get_dashboard():
                 "actionable_payment_period": item.get("actionable_payment_period"),
                 "actionable_payment_status": item.get("actionable_payment_status"),
                 "actionable_payment_amount": item.get("actionable_payment_amount"),
+                "actionable_payment_paid_amount": item.get("actionable_payment_paid_amount"),
+                "actionable_payment_recognized_amount": item.get("actionable_payment_recognized_amount"),
                 "contract_id": item.get("contract_id"),
                 "due_adjustment_date": due_adjustment_date if item["adjustment_frequency"] and item["start_date"] else None,
                 "notice_sent_at": notice_sent_at,
@@ -912,9 +914,21 @@ def create_payment(contract_id: int, data: PaymentCreate):
     paid_amount = data.paid_amount
     paid_at = str(data.paid_at) if data.paid_at is not None else None
 
-    if paid_amount is None or paid_amount == 0:
+    brokerage_fee = data.brokerage_fee
+    repair_discount = data.repair_discount
+    other_discount = data.other_discount
+    total_deductions = brokerage_fee + repair_discount + other_discount
+    gap = max(expected_amount - (paid_amount or 0), 0)
+    if total_deductions > gap:
+        raise HTTPException(
+            status_code=422,
+            detail="Las deducciones no pueden superar el monto no cubierto por el pago efectivo.",
+        )
+
+    recognized = (paid_amount or 0) + total_deductions
+    if recognized == 0:
         status = "pending"
-    elif paid_amount >= expected_amount:
+    elif recognized >= expected_amount:
         status = "paid"
     else:
         status = "partial"
@@ -929,6 +943,9 @@ def create_payment(contract_id: int, data: PaymentCreate):
             paid_amount=paid_amount,
             paid_at=paid_at,
             status=status,
+            brokerage_fee=brokerage_fee,
+            repair_discount=repair_discount,
+            other_discount=other_discount,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -975,16 +992,38 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
     comment = data.comment if data.comment is not None else payment["comment"]
 
-    if paid_amount is None:
-        status = payment["status"]
-    elif paid_amount == 0:
+    brokerage_fee = (
+        data.brokerage_fee if data.brokerage_fee is not None else payment["brokerage_fee"]
+    )
+    repair_discount = (
+        data.repair_discount if data.repair_discount is not None else payment["repair_discount"]
+    )
+    other_discount = (
+        data.other_discount if data.other_discount is not None else payment["other_discount"]
+    )
+
+    total_deductions = brokerage_fee + repair_discount + other_discount
+    gap = max(payment["expected_amount"] - (paid_amount or 0), 0)
+    if total_deductions > gap:
+        raise HTTPException(
+            status_code=422,
+            detail="Las deducciones no pueden superar el monto no cubierto por el pago efectivo.",
+        )
+
+    recognized = (paid_amount or 0) + total_deductions
+    if recognized == 0:
         status = "pending"
-    elif paid_amount >= payment["expected_amount"]:
+    elif recognized >= payment["expected_amount"]:
         status = "paid"
     else:
         status = "partial"
 
-    update_payment(payment_id, paid_amount, paid_at, status, comment)
+    update_payment(
+        payment_id, paid_amount, paid_at, status, comment,
+        brokerage_fee=brokerage_fee,
+        repair_discount=repair_discount,
+        other_discount=other_discount,
+    )
     return get_payment(payment_id)
 
 

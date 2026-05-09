@@ -244,14 +244,33 @@ class PaymentSource(str, Enum):
     manual = "manual"
 
 
+class PaymentDeductionInput(BaseModel):
+    label: str
+    amount: int = Field(gt=0)
+    note: str | None = None
+
+    @field_validator("label")
+    @classmethod
+    def label_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("label must not be blank")
+        return value
+
+
+class PaymentDeductionResponse(BaseModel):
+    id: int
+    label: str
+    amount: int
+    note: str | None = None
+    sort_order: int
+
+
 class PaymentCreate(BaseModel):
     period: str
     paid_amount: int | None = Field(default=None, ge=0)
     paid_at: date | None = None
     comment: str | None = None
-    brokerage_fee: int = Field(default=0, ge=0)
-    repair_discount: int = Field(default=0, ge=0)
-    other_discount: int = Field(default=0, ge=0)
+    deductions: list[PaymentDeductionInput] = Field(default_factory=list)
 
     @field_validator("period")
     @classmethod
@@ -265,9 +284,7 @@ class PaymentUpdate(BaseModel):
     paid_amount: int | None = None
     paid_at: date | None = None
     comment: str | None = None
-    brokerage_fee: int | None = Field(default=None, ge=0)
-    repair_discount: int | None = Field(default=None, ge=0)
-    other_discount: int | None = Field(default=None, ge=0)
+    deductions: list[PaymentDeductionInput] | None = None
 
 
 class PaymentResponse(BaseModel):
@@ -282,9 +299,7 @@ class PaymentResponse(BaseModel):
     source: PaymentSource
     comment: str | None = None
     created_at: date
-    brokerage_fee: int = 0
-    repair_discount: int = 0
-    other_discount: int = 0
+    deductions: list[PaymentDeductionResponse] = Field(default_factory=list)
     recognized_amount: int = 0
     overpayment: int = 0
     net_owner_amount: int = 0

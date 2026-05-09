@@ -914,10 +914,6 @@ def create_payment(contract_id: int, data: PaymentCreate):
     paid_amount = data.paid_amount
     paid_at = str(data.paid_at) if data.paid_at is not None else None
 
-    brokerage_fee = data.brokerage_fee
-    repair_discount = data.repair_discount
-    other_discount = data.other_discount
-
     paid = paid_amount or 0
     if paid == 0:
         status = "pending"
@@ -925,6 +921,8 @@ def create_payment(contract_id: int, data: PaymentCreate):
         status = "paid"
     else:
         status = "partial"
+
+    deductions = [d.model_dump() for d in data.deductions]
 
     try:
         payment_id = insert_payment(
@@ -936,9 +934,7 @@ def create_payment(contract_id: int, data: PaymentCreate):
             paid_amount=paid_amount,
             paid_at=paid_at,
             status=status,
-            brokerage_fee=brokerage_fee,
-            repair_discount=repair_discount,
-            other_discount=other_discount,
+            deductions=deductions,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -985,14 +981,11 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
     comment = data.comment if data.comment is not None else payment["comment"]
 
-    brokerage_fee = (
-        data.brokerage_fee if data.brokerage_fee is not None else payment["brokerage_fee"]
-    )
-    repair_discount = (
-        data.repair_discount if data.repair_discount is not None else payment["repair_discount"]
-    )
-    other_discount = (
-        data.other_discount if data.other_discount is not None else payment["other_discount"]
+    # deductions absent → None (no change); [] → clear; [...] → replace
+    deductions = (
+        [d.model_dump() for d in data.deductions]
+        if "deductions" in data.model_fields_set
+        else None
     )
 
     paid = paid_amount or 0
@@ -1003,12 +996,7 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     else:
         status = "partial"
 
-    update_payment(
-        payment_id, paid_amount, paid_at, status, comment,
-        brokerage_fee=brokerage_fee,
-        repair_discount=repair_discount,
-        other_discount=other_discount,
-    )
+    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions)
     return get_payment(payment_id)
 
 

@@ -60,6 +60,31 @@ function getNextPayablePeriod(payments, sortedPayments) {
   return { period: '', payment: null, isVirtual: false }
 }
 
+// Returns { ok: true, deductions: [...] } or { ok: false, error: string }.
+// Fully empty rows (label+amount+note all blank) are silently dropped.
+// Partially completed rows (one present, one missing) block the save.
+function normalizeDeductions(rows) {
+  const result = []
+  for (const row of rows) {
+    const labelBlank = !row.label.trim()
+    const amountBlank = row.amount === ''
+    const noteBlank = !row.note.trim()
+    if (labelBlank && amountBlank && noteBlank) continue
+    if (labelBlank || amountBlank) {
+      return {
+        ok: false,
+        error: 'Completa concepto y monto en cada descuento, o elimina la fila vacía.',
+      }
+    }
+    result.push({
+      label: row.label.trim(),
+      amount: parseAmountInput(row.amount),
+      note: row.note.trim() || null,
+    })
+  }
+  return { ok: true, deductions: result }
+}
+
 function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [payments, setPayments] = useState([])
   const [isLoading, setIsLoading] = useState(true)
@@ -78,18 +103,14 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [formAmount, setFormAmount] = useState('')
   const [formDate, setFormDate] = useState(todayLocal())
   const [formNote, setFormNote] = useState('')
-  const [formBrokerageFee, setFormBrokerageFee] = useState('')
-  const [formRepairDiscount, setFormRepairDiscount] = useState('')
-  const [formOtherDiscount, setFormOtherDiscount] = useState('')
+  const [formDeductions, setFormDeductions] = useState([])
 
   // Edit form
   const [editPayment, setEditPayment] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editDate, setEditDate] = useState('')
   const [editNote, setEditNote] = useState('')
-  const [editBrokerageFee, setEditBrokerageFee] = useState('')
-  const [editRepairDiscount, setEditRepairDiscount] = useState('')
-  const [editOtherDiscount, setEditOtherDiscount] = useState('')
+  const [editDeductions, setEditDeductions] = useState([])
 
   // Overpayment
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
@@ -162,9 +183,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   })()
 
   function openAdd() {
-    setFormBrokerageFee('')
-    setFormRepairDiscount('')
-    setFormOtherDiscount('')
+    setFormDeductions([])
     if (payments.length === 0) {
       setFormPeriod('')
       setFormUseCustom(true)
@@ -207,9 +226,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       return
     }
     setFormPeriod(value)
-    setFormBrokerageFee('')
-    setFormRepairDiscount('')
-    setFormOtherDiscount('')
+    setFormDeductions([])
     const p = payments.find(py => py.period === value)
     if (p) {
       setFormAmount(formatAmountInput(getPrefillAmount(p)))
@@ -226,9 +243,13 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     setEditAmount(formatAmountInput(payment.paid_amount ?? payment.expected_amount))
     setEditDate(payment.paid_at ?? todayLocal())
     setEditNote(payment.comment ?? '')
-    setEditBrokerageFee(payment.brokerage_fee ? formatAmountInput(payment.brokerage_fee) : '')
-    setEditRepairDiscount(payment.repair_discount ? formatAmountInput(payment.repair_discount) : '')
-    setEditOtherDiscount(payment.other_discount ? formatAmountInput(payment.other_discount) : '')
+    setEditDeductions(
+      (payment.deductions ?? []).map(d => ({
+        label: d.label,
+        amount: d.amount ? formatAmountInput(String(d.amount)) : '',
+        note: d.note ?? '',
+      }))
+    )
     setFormError(null)
     setActiveForm('edit')
   }
@@ -247,6 +268,20 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     const period = formUseCustom ? formCustomPeriod : formPeriod
     const amount = parseAmountInput(formAmount)
     const existing = payments.find(p => p.period === period)
+
+    // Validate deductions for new rows before the overpayment check so partial
+    // rows are caught immediately, never reach the draft, and never get submitted.
+    let normalizedDeds = []
+    if (!existing) {
+      const dedResult = normalizeDeductions(formDeductions)
+      if (!dedResult.ok) {
+        setFormError(dedResult.error)
+        setIsSubmitting(false)
+        return
+      }
+      normalizedDeds = dedResult.deductions
+    }
+
     const expectedAmount = existing ? existing.expected_amount : (contract.current_rent ?? 0)
     const alreadyPaid = existing ? (existing.paid_amount ?? 0) : 0
     const originPaidAfter = alreadyPaid + amount
@@ -264,6 +299,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         overpaymentAmount,
         formDate,
         formNote,
+        formDeductions: normalizedDeds,
         paymentId: existing?.id ?? null,
         nextPeriod,
         nextPayment,
@@ -292,9 +328,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_amount: amount || null,
             paid_at: formDate || null,
             comment: formNote || null,
-            brokerage_fee: formBrokerageFee !== '' ? parseAmountInput(formBrokerageFee) : 0,
-            repair_discount: formRepairDiscount !== '' ? parseAmountInput(formRepairDiscount) : 0,
-            other_discount: formOtherDiscount !== '' ? parseAmountInput(formOtherDiscount) : 0,
+            deductions: normalizedDeds,
           }),
         })
         if (res.status === 409) {
@@ -317,6 +351,12 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     e.preventDefault()
     setIsSubmitting(true)
     setFormError(null)
+    const dedResult = normalizeDeductions(editDeductions)
+    if (!dedResult.ok) {
+      setFormError(dedResult.error)
+      setIsSubmitting(false)
+      return
+    }
     const newTotal = parseAmountInput(editAmount)
     const originPaidBefore = editPayment.paid_amount ?? 0
     const expectedAmount = editPayment.expected_amount
@@ -347,9 +387,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       if (editAmount !== '') body.paid_amount = newTotal
       if (editDate !== '') body.paid_at = editDate
       if (editNote !== '') body.comment = editNote
-      body.brokerage_fee = editBrokerageFee !== '' ? parseAmountInput(editBrokerageFee) : 0
-      body.repair_discount = editRepairDiscount !== '' ? parseAmountInput(editRepairDiscount) : 0
-      body.other_discount = editOtherDiscount !== '' ? parseAmountInput(editOtherDiscount) : 0
+      body.deductions = dedResult.deductions
       const res = await fetch(`${API_BASE}/payments/${editPayment.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -413,7 +451,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   // applyAfter=false: saves only, no transfer (Case C — next period fully paid).
   async function saveFromDraft(applyAfter) {
     if (!pendingOverpaymentDraft) return
-    const { period, paymentId, originPaidAfter, formDate, formNote } = pendingOverpaymentDraft
+    const { period, paymentId, originPaidAfter, formDate, formNote, formDeductions: draftDeductions } = pendingOverpaymentDraft
     setIsSubmitting(true)
     setFormError(null)
     setOverpaymentError(null)
@@ -442,6 +480,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_amount: originPaidAfter || null,
             paid_at: formDate || null,
             comment: formNote || null,
+            deductions: draftDeductions ?? [],
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -479,13 +518,13 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const addFormIsNewRow = !payments.some(p => p.period === addFormTargetPeriod)
 
   const addTotalDeductions = addFormIsNewRow
-    ? [formBrokerageFee, formRepairDiscount, formOtherDiscount]
-        .reduce((s, v) => s + (v !== '' ? parseAmountInput(v) : 0), 0)
+    ? formDeductions.reduce((s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0)
     : 0
   const addNetOwnerAmount = (formAmount !== '' ? parseAmountInput(formAmount) : 0) - addTotalDeductions
 
-  const editTotalDeductions = [editBrokerageFee, editRepairDiscount, editOtherDiscount]
-    .reduce((s, v) => s + (v !== '' ? parseAmountInput(v) : 0), 0)
+  const editTotalDeductions = editDeductions.reduce(
+    (s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0
+  )
   const editNetOwnerAmount = (editAmount !== '' ? parseAmountInput(editAmount) : 0) - editTotalDeductions
 
   // Build the inline confirmation panel JSX once, shared by add and edit forms.
@@ -737,49 +776,63 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 />
               </label>
               {addFormIsNewRow && (
-                <>
-                  <label className="payment-form-label">
-                    Honorarios corredora
-                    <input
-                      className="payment-form-input"
-                      type="text"
-                      inputMode="numeric"
-                      value={formBrokerageFee}
-                      onChange={e => setFormBrokerageFee(formatAmountInput(e.target.value))}
-                      placeholder="0"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                  </label>
-                  <label className="payment-form-label">
-                    Descuento reparación
-                    <input
-                      className="payment-form-input"
-                      type="text"
-                      inputMode="numeric"
-                      value={formRepairDiscount}
-                      onChange={e => setFormRepairDiscount(formatAmountInput(e.target.value))}
-                      placeholder="0"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                  </label>
-                  <label className="payment-form-label">
-                    Otro descuento
-                    <input
-                      className="payment-form-input"
-                      type="text"
-                      inputMode="numeric"
-                      value={formOtherDiscount}
-                      onChange={e => setFormOtherDiscount(formatAmountInput(e.target.value))}
-                      placeholder="0"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                  </label>
+                <div className="deductions-section">
+                  <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
+                  {formDeductions.map((row, i) => (
+                    <div key={i} className="deduction-row">
+                      <input
+                        className="payment-form-input deduction-input-label"
+                        type="text"
+                        value={row.label}
+                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                        placeholder="Concepto"
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                      <input
+                        className="payment-form-input deduction-input-amount"
+                        type="text"
+                        inputMode="numeric"
+                        value={row.amount}
+                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
+                        placeholder="0"
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                      <input
+                        className="payment-form-input deduction-input-note"
+                        type="text"
+                        value={row.note}
+                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+                        placeholder="Nota opcional"
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                      {!pendingOverpaymentDraft && (
+                        <button
+                          type="button"
+                          className="btn-link-secondary"
+                          onClick={() => setFormDeductions(prev => prev.filter((_, j) => j !== i))}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {!pendingOverpaymentDraft && (
+                    <button
+                      type="button"
+                      className="btn-link-secondary"
+                      onClick={() => setFormDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
+                    >
+                      + Agregar descuento
+                    </button>
+                  )}
                   {addTotalDeductions > 0 && (
                     <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                      Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwnerAmount)}</strong>
+                      Total descuentos: {formatCLP(addTotalDeductions)}
+                      {' · '}Neto dueño:{' '}
+                      <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwnerAmount)}</strong>
                     </span>
                   )}
-                </>
+                </div>
               )}
               {!pendingOverpaymentDraft && (
                 <div className="payment-form-actions">
@@ -842,47 +895,63 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   disabled={!!pendingOverpaymentDraft}
                 />
               </label>
-              <label className="payment-form-label">
-                Honorarios corredora
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  inputMode="numeric"
-                  value={editBrokerageFee}
-                  onChange={e => setEditBrokerageFee(formatAmountInput(e.target.value))}
-                  placeholder="0"
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Descuento reparación
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  inputMode="numeric"
-                  value={editRepairDiscount}
-                  onChange={e => setEditRepairDiscount(formatAmountInput(e.target.value))}
-                  placeholder="0"
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Otro descuento
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  inputMode="numeric"
-                  value={editOtherDiscount}
-                  onChange={e => setEditOtherDiscount(formatAmountInput(e.target.value))}
-                  placeholder="0"
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              {editTotalDeductions > 0 && (
-                <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                  Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwnerAmount)}</strong>
-                </span>
-              )}
+              <div className="deductions-section">
+                <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
+                {editDeductions.map((row, i) => (
+                  <div key={i} className="deduction-row">
+                    <input
+                      className="payment-form-input deduction-input-label"
+                      type="text"
+                      value={row.label}
+                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                      placeholder="Concepto"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                    <input
+                      className="payment-form-input deduction-input-amount"
+                      type="text"
+                      inputMode="numeric"
+                      value={row.amount}
+                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
+                      placeholder="0"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                    <input
+                      className="payment-form-input deduction-input-note"
+                      type="text"
+                      value={row.note}
+                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+                      placeholder="Nota opcional"
+                      disabled={!!pendingOverpaymentDraft}
+                    />
+                    {!pendingOverpaymentDraft && (
+                      <button
+                        type="button"
+                        className="btn-link-secondary"
+                        onClick={() => setEditDeductions(prev => prev.filter((_, j) => j !== i))}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {!pendingOverpaymentDraft && (
+                  <button
+                    type="button"
+                    className="btn-link-secondary"
+                    onClick={() => setEditDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
+                  >
+                    + Agregar descuento
+                  </button>
+                )}
+                {editTotalDeductions > 0 && (
+                  <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                    Total descuentos: {formatCLP(editTotalDeductions)}
+                    {' · '}Neto dueño:{' '}
+                    <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwnerAmount)}</strong>
+                  </span>
+                )}
+              </div>
               {!pendingOverpaymentDraft && (
                 <div className="payment-form-actions">
                   <button className="btn-primary" type="submit" disabled={isSubmitting}>
@@ -967,7 +1036,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                             {p.paid_amount != null
                               ? formatCLP(p.paid_amount)
                               : <span className="text-muted">—</span>}
-                            {(p.brokerage_fee + p.repair_discount + p.other_discount) > 0 && (
+                            {p.deductions && p.deductions.length > 0 && (
                               <span className="text-muted" style={{ fontSize: '0.75em', display: 'block' }}>
                                 Neto dueño: {formatCLP(p.net_owner_amount)}
                               </span>

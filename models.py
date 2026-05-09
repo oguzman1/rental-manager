@@ -287,6 +287,7 @@ class PaymentResponse(BaseModel):
     other_discount: int = 0
     recognized_amount: int = 0
     overpayment: int = 0
+    net_owner_amount: int = 0
 
 
 class TenantCreate(BaseModel):

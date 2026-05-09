@@ -36,8 +36,8 @@ function getPrefillAmount(payment) {
   if (!payment) return ''
   if (payment.status === 'paid') return ''
   if (payment.status === 'partial') {
-    const recognized = payment.recognized_amount ?? payment.paid_amount ?? 0
-    return String(Math.max(0, payment.expected_amount - recognized))
+    const paid = payment.paid_amount ?? 0
+    return String(Math.max(0, payment.expected_amount - paid))
   }
   return String(payment.expected_amount)
 }
@@ -478,6 +478,16 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const addFormTargetPeriod = formUseCustom ? formCustomPeriod : formPeriod
   const addFormIsNewRow = !payments.some(p => p.period === addFormTargetPeriod)
 
+  const addTotalDeductions = addFormIsNewRow
+    ? [formBrokerageFee, formRepairDiscount, formOtherDiscount]
+        .reduce((s, v) => s + (v !== '' ? parseAmountInput(v) : 0), 0)
+    : 0
+  const addNetOwnerAmount = (formAmount !== '' ? parseAmountInput(formAmount) : 0) - addTotalDeductions
+
+  const editTotalDeductions = [editBrokerageFee, editRepairDiscount, editOtherDiscount]
+    .reduce((s, v) => s + (v !== '' ? parseAmountInput(v) : 0), 0)
+  const editNetOwnerAmount = (editAmount !== '' ? parseAmountInput(editAmount) : 0) - editTotalDeductions
+
   // Build the inline confirmation panel JSX once, shared by add and edit forms.
   let overpaymentPanel = null
   if (pendingOverpaymentDraft) {
@@ -496,7 +506,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     const fullyPaidBlocked = isFullyPaid(nextPayment)
     const nextRemainingCapacity = nextPayment == null
       ? (contract.current_rent ?? 0)
-      : Math.max(0, (nextPayment.expected_amount ?? 0) - (nextPayment.recognized_amount ?? nextPayment.paid_amount ?? 0))
+      : Math.max(0, (nextPayment.expected_amount ?? 0) - (nextPayment.paid_amount ?? 0))
     const overflowBlocked = overpaymentAmount > nextRemainingCapacity
     const nextBlocked = fullyPaidBlocked || overflowBlocked
 
@@ -692,7 +702,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 </label>
               )}
               <label className="payment-form-label">
-                Monto a registrar
+                Arriendo cobrado / total ingresos
                 <input
                   className="payment-form-input"
                   type="text"
@@ -764,6 +774,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                       disabled={!!pendingOverpaymentDraft}
                     />
                   </label>
+                  {addTotalDeductions > 0 && (
+                    <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                      Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwnerAmount)}</strong>
+                    </span>
+                  )}
                 </>
               )}
               {!pendingOverpaymentDraft && (
@@ -796,7 +811,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                 />
               </label>
               <label className="payment-form-label">
-                Monto pagado total
+                Arriendo cobrado / total ingresos
                 <input
                   className="payment-form-input"
                   type="text"
@@ -863,6 +878,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   disabled={!!pendingOverpaymentDraft}
                 />
               </label>
+              {editTotalDeductions > 0 && (
+                <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                  Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwnerAmount)}</strong>
+                </span>
+              )}
               {!pendingOverpaymentDraft && (
                 <div className="payment-form-actions">
                   <button className="btn-primary" type="submit" disabled={isSubmitting}>
@@ -935,7 +955,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                     const rowIsBlocked = isFullyPaid(rowNextPayment)
                     const rowNextRemainingCapacity = rowNextPayment == null
                       ? (contract.current_rent ?? 0)
-                      : Math.max(0, (rowNextPayment.expected_amount ?? 0) - (rowNextPayment.recognized_amount ?? rowNextPayment.paid_amount ?? 0))
+                      : Math.max(0, (rowNextPayment.expected_amount ?? 0) - (rowNextPayment.paid_amount ?? 0))
                     const rowOverflowBlocked = p.overpayment > rowNextRemainingCapacity
                     return (
                       <Fragment key={p.id}>
@@ -949,7 +969,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                               : <span className="text-muted">—</span>}
                             {(p.brokerage_fee + p.repair_discount + p.other_discount) > 0 && (
                               <span className="text-muted" style={{ fontSize: '0.75em', display: 'block' }}>
-                                + {formatCLP(p.brokerage_fee + p.repair_discount + p.other_discount)} ded.
+                                Neto dueño: {formatCLP(p.net_owner_amount)}
                               </span>
                             )}
                           </td>

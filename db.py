@@ -750,9 +750,9 @@ def list_dashboard_items() -> list[dict]:
                 SELECT
                     contract_id,
                     CASE
-                        WHEN COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount >= expected_amount THEN 'paid'
-                        WHEN COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount > 0               THEN 'partial'
-                        ELSE                                                                                                     'pending'
+                        WHEN COALESCE(paid_amount, 0) >= expected_amount THEN 'paid'
+                        WHEN COALESCE(paid_amount, 0) > 0               THEN 'partial'
+                        ELSE                                                  'pending'
                     END AS status
                 FROM payments
                 WHERE period = strftime('%Y-%m', 'now')
@@ -760,8 +760,8 @@ def list_dashboard_items() -> list[dict]:
             LEFT JOIN (
                 SELECT
                     contract_id,
-                    COUNT(*)                                                                                            AS total_exigibles,
-                    SUM(expected_amount - COALESCE(paid_amount, 0) - brokerage_fee - repair_discount - other_discount) AS saldo_pendiente
+                    COUNT(*)                                      AS total_exigibles,
+                    SUM(expected_amount - COALESCE(paid_amount, 0)) AS saldo_pendiente
                 FROM payments
                 WHERE period <= strftime('%Y-%m', 'now')
                 GROUP BY contract_id
@@ -784,19 +784,19 @@ def list_dashboard_items() -> list[dict]:
                     p1.contract_id,
                     p1.period          AS actionable_payment_period,
                     CASE
-                        WHEN COALESCE(p1.paid_amount, 0) + p1.brokerage_fee + p1.repair_discount + p1.other_discount = 0 THEN 'pending'
+                        WHEN COALESCE(p1.paid_amount, 0) = 0 THEN 'pending'
                         ELSE 'partial'
                     END                AS actionable_payment_status,
                     p1.expected_amount AS actionable_payment_amount,
                     p1.paid_amount     AS actionable_payment_paid_amount,
-                    COALESCE(p1.paid_amount, 0) + p1.brokerage_fee + p1.repair_discount + p1.other_discount
+                    COALESCE(p1.paid_amount, 0)
                                        AS actionable_payment_recognized_amount
                 FROM payments p1
                 INNER JOIN (
                     SELECT contract_id, MIN(period) AS min_period
                     FROM   payments
                     WHERE  period <= strftime('%Y-%m', 'now')
-                      AND  COALESCE(paid_amount, 0) + brokerage_fee + repair_discount + other_discount < expected_amount
+                      AND  COALESCE(paid_amount, 0) < expected_amount
                     GROUP BY contract_id
                 ) p3 ON p1.contract_id = p3.contract_id
                      AND p1.period      = p3.min_period
@@ -1439,8 +1439,10 @@ def _payment_row_to_dict(row) -> dict:
     brokerage_fee = row[11]
     repair_discount = row[12]
     other_discount = row[13]
-    recognized = (paid or 0) + brokerage_fee + repair_discount + other_discount
+    total_deductions = brokerage_fee + repair_discount + other_discount
+    recognized = paid or 0  # recognized_amount = paid_amount (legacy field, kept for compat)
     overpayment = max(0, paid - expected) if paid is not None else 0
+    net_owner_amount = (paid or 0) - total_deductions
     return {
         "id": row[0],
         "contract_id": row[1],
@@ -1458,6 +1460,7 @@ def _payment_row_to_dict(row) -> dict:
         "other_discount": other_discount,
         "recognized_amount": recognized,
         "overpayment": overpayment,
+        "net_owner_amount": net_owner_amount,
     }
 
 
@@ -1632,14 +1635,6 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
 
         current = _payment_row_to_dict(row)
         if current["overpayment"] <= 0:
-            deductions = (
-                current["brokerage_fee"] + current["repair_discount"] + current["other_discount"]
-            )
-            if deductions > 0 and current["recognized_amount"] >= current["expected_amount"]:
-                raise ValueError(
-                    "No cash overpayment to transfer. "
-                    "This period is covered by deductions, not a cash surplus."
-                )
             raise ValueError("No overpayment to apply.")
 
         excess = current["overpayment"]

@@ -917,18 +917,11 @@ def create_payment(contract_id: int, data: PaymentCreate):
     brokerage_fee = data.brokerage_fee
     repair_discount = data.repair_discount
     other_discount = data.other_discount
-    total_deductions = brokerage_fee + repair_discount + other_discount
-    gap = max(expected_amount - (paid_amount or 0), 0)
-    if total_deductions > gap:
-        raise HTTPException(
-            status_code=422,
-            detail="Las deducciones no pueden superar el monto no cubierto por el pago efectivo.",
-        )
 
-    recognized = (paid_amount or 0) + total_deductions
-    if recognized == 0:
+    paid = paid_amount or 0
+    if paid == 0:
         status = "pending"
-    elif recognized >= expected_amount:
+    elif paid >= expected_amount:
         status = "paid"
     else:
         status = "partial"
@@ -1002,18 +995,10 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
         data.other_discount if data.other_discount is not None else payment["other_discount"]
     )
 
-    total_deductions = brokerage_fee + repair_discount + other_discount
-    gap = max(payment["expected_amount"] - (paid_amount or 0), 0)
-    if total_deductions > gap:
-        raise HTTPException(
-            status_code=422,
-            detail="Las deducciones no pueden superar el monto no cubierto por el pago efectivo.",
-        )
-
-    recognized = (paid_amount or 0) + total_deductions
-    if recognized == 0:
+    paid = paid_amount or 0
+    if paid == 0:
         status = "pending"
-    elif recognized >= payment["expected_amount"]:
+    elif paid >= payment["expected_amount"]:
         status = "paid"
     else:
         status = "partial"

@@ -2835,8 +2835,8 @@ def test_deductions_default_to_zero():
     assert body["status"] == "pending"
 
 
-def test_deductions_exact_cover_gap_status_paid():
-    """paid_amount < expected + deductions fill gap exactly → paid, overpayment 0."""
+def test_full_rent_paid_with_deductions_status_paid():
+    """paid_amount == expected + deductions → status paid, net_owner_amount = paid - deductions."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-02"})
     assert r.status_code == 200
@@ -2845,18 +2845,20 @@ def test_deductions_exact_cover_gap_status_paid():
 
     r = client.patch(
         f"/payments/{pid}",
-        json={"paid_amount": 300000, "brokerage_fee": 200000},
+        json={"paid_amount": expected, "brokerage_fee": 50000, "repair_discount": 30000},
     )
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "paid"
     assert body["overpayment"] == 0
-    assert body["recognized_amount"] == expected
-    assert body["brokerage_fee"] == 200000
+    assert body["recognized_amount"] == expected  # recognized = paid_amount
+    assert body["net_owner_amount"] == expected - 50000 - 30000  # 420000
+    assert body["brokerage_fee"] == 50000
+    assert body["repair_discount"] == 30000
 
 
-def test_deductions_partial_cover_gap_status_partial():
-    """paid_amount < expected + deductions cover part of gap → partial."""
+def test_paid_below_expected_with_deductions_still_partial():
+    """paid_amount < expected → status partial regardless of deduction amounts."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-03"})
     pid = r.json()["id"]
@@ -2868,33 +2870,53 @@ def test_deductions_partial_cover_gap_status_partial():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "partial"
-    assert body["recognized_amount"] == 300000
+    assert body["recognized_amount"] == 200000  # recognized = paid_amount, not paid+deductions
     assert body["overpayment"] == 0
+    assert body["net_owner_amount"] == 100000  # 200000 - 100000
 
 
-def test_deductions_exceed_gap_on_patch_returns_422():
-    """Deductions > unpaid gap → 422."""
+def test_deductions_allowed_when_paid_equals_expected():
+    """Deductions are allowed when paid_amount == expected (no gap constraint)."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-04"})
     pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
 
-    # paid=400000, gap=100000, brokerage_fee=150000 → exceeds gap
+    # paid=expected, brokerage_fee=200000 — previously blocked by gap check, now allowed
     r = client.patch(
         f"/payments/{pid}",
-        json={"paid_amount": 400000, "brokerage_fee": 150000},
+        json={"paid_amount": expected, "brokerage_fee": 200000},
     )
-    assert r.status_code == 422
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["brokerage_fee"] == 200000
+    assert body["net_owner_amount"] == expected - 200000
 
 
-def test_deductions_exceed_gap_on_create_returns_422():
-    """Create with deductions > gap → 422."""
+def test_brokerage_liquidation_full_case():
+    """Real brokerage case: paid=expected, deductions=liquidation items → paid, net correct."""
     cid = _setup_payment_property()
-    # expected=500000, paid=300000 → gap=200000, brokerage_fee=250000 > gap
+    expected = 500000  # contract rent
+
     r = client.post(
         f"/contracts/{cid}/payments",
-        json={"period": "2030-05", "paid_amount": 300000, "brokerage_fee": 250000},
+        json={
+            "period": "2030-05",
+            "paid_amount": expected,
+            "brokerage_fee": 22647,
+            "repair_discount": 35700,
+        },
     )
-    assert r.status_code == 422
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["paid_amount"] == expected
+    assert body["brokerage_fee"] == 22647
+    assert body["repair_discount"] == 35700
+    assert body["overpayment"] == 0
+    assert body["recognized_amount"] == expected  # recognized = paid_amount
+    assert body["net_owner_amount"] == expected - 22647 - 35700  # 441653
 
 
 def test_cash_paid_above_expected_overpayment_cash_only():
@@ -2912,14 +2934,15 @@ def test_cash_paid_above_expected_overpayment_cash_only():
     assert body["recognized_amount"] == 600000
 
 
-def test_deduction_covered_cannot_apply_overpayment():
-    """Period fully covered by deductions (no cash surplus) cannot apply overpayment."""
+def test_cannot_apply_overpayment_when_no_cash_surplus():
+    """Period paid exactly with deductions has no cash surplus to transfer."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-07"})
     pid = r.json()["id"]
+    expected = r.json()["expected_amount"]
 
-    # Cover with deductions only — no cash
-    r = client.patch(f"/payments/{pid}", json={"brokerage_fee": 500000})
+    # Pay exactly expected with a deduction — overpayment = 0
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": expected, "brokerage_fee": 50000})
     assert r.status_code == 200
     assert r.json()["status"] == "paid"
     assert r.json()["overpayment"] == 0
@@ -2928,20 +2951,26 @@ def test_deduction_covered_cannot_apply_overpayment():
     assert r.status_code == 400
 
 
-def test_patch_revalidates_merged_state():
-    """PATCH merges existing + incoming values and revalidates the combined state."""
+def test_patch_merges_deduction_state_correctly():
+    """PATCH merges existing deductions with incoming values; no gap-based rejection."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-08"})
     pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
 
-    # First PATCH: paid=300000, brokerage_fee=200000 → gap=200000, deductions=200000 ✓
-    r = client.patch(f"/payments/{pid}", json={"paid_amount": 300000, "brokerage_fee": 200000})
+    # First PATCH: paid=expected, brokerage=200000
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": expected, "brokerage_fee": 200000})
     assert r.status_code == 200
+    assert r.json()["status"] == "paid"
 
-    # Second PATCH: bump paid to 400000 without touching brokerage_fee.
-    # Merged state: paid=400000, brokerage_fee=200000 → gap=100000, deductions=200000 > gap → 422
-    r = client.patch(f"/payments/{pid}", json={"paid_amount": 400000})
-    assert r.status_code == 422
+    # Second PATCH: bump paid to 600000 — merged brokerage=200000 retained, no 422
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": 600000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["overpayment"] == 100000
+    assert body["brokerage_fee"] == 200000  # carried over from previous state
+    assert body["net_owner_amount"] == 600000 - 200000  # 400000
 
 
 def test_patch_clears_deduction_with_zero():
@@ -2962,8 +2991,8 @@ def test_patch_clears_deduction_with_zero():
     assert body["recognized_amount"] == 300000
 
 
-def test_deductions_with_null_paid_amount_treated_as_zero():
-    """Deductions are allowed when paid_amount is null (treated as 0)."""
+def test_deductions_without_cash_do_not_affect_status():
+    """Deductions without a cash payment leave status pending — deductions don't cover rent."""
     cid = _setup_payment_property()
     r = client.post(
         f"/contracts/{cid}/payments",
@@ -2973,9 +3002,26 @@ def test_deductions_with_null_paid_amount_treated_as_zero():
     body = r.json()
     assert body["paid_amount"] is None
     assert body["brokerage_fee"] == 500000
-    assert body["recognized_amount"] == 500000
-    assert body["status"] == "paid"
+    assert body["recognized_amount"] == 0   # recognized = paid_amount = 0
+    assert body["status"] == "pending"      # no cash payment → pending
     assert body["overpayment"] == 0
+
+
+def test_net_owner_amount_returned_in_payment_response():
+    """net_owner_amount is present in PaymentResponse and equals paid - deductions."""
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-11"})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": expected, "brokerage_fee": 22647, "repair_discount": 35700},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "net_owner_amount" in body
+    assert body["net_owner_amount"] == expected - 22647 - 35700
 
 
 # ─── Dashboard deduction tests ────────────────────────────────────────────────
@@ -3017,8 +3063,8 @@ def _make_deduction_dashboard_property(rol: str, rent: int = 500000) -> int:
     return _get_contract_id_for_rol(rol)
 
 
-def test_dashboard_fully_covered_by_deductions_no_alert():
-    """Period fully covered by deductions → current_payment_status paid, no actionable period."""
+def test_dashboard_full_paid_with_deductions_no_alert():
+    """Brokerage case: paid_amount=expected + deductions → status paid, no actionable period."""
     current_period = datetime.date.today().strftime("%Y-%m")
     cid = _make_deduction_dashboard_property("DED01-00001")
 
@@ -3027,8 +3073,10 @@ def test_dashboard_fully_covered_by_deductions_no_alert():
     pid = r.json()["id"]
     expected = r.json()["expected_amount"]
 
-    r = client.patch(f"/payments/{pid}", json={"brokerage_fee": expected})
+    # Pay full rent, add brokerage deduction — should not trigger alert
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": expected, "brokerage_fee": 50000})
     assert r.status_code == 200
+    assert r.json()["status"] == "paid"
 
     items = client.get("/dashboard").json()
     item = next(i for i in items if i["rol"] == "DED01-00001")
@@ -3036,8 +3084,8 @@ def test_dashboard_fully_covered_by_deductions_no_alert():
     assert item["actionable_payment_period"] is None
 
 
-def test_dashboard_partial_missing_amount_uses_recognized_amount():
-    """Dashboard partial: actionable_payment_recognized_amount reflects deductions."""
+def test_dashboard_partial_missing_amount_uses_paid_amount():
+    """Dashboard partial: missing amount is based on paid_amount, not deductions."""
     current_period = datetime.date.today().strftime("%Y-%m")
     cid = _make_deduction_dashboard_property("DED02-00001")
 
@@ -3046,7 +3094,7 @@ def test_dashboard_partial_missing_amount_uses_recognized_amount():
     pid = r.json()["id"]
     expected = r.json()["expected_amount"]  # 500000
 
-    # 200000 cash + 100000 repair_discount = 300000 recognized; missing = 200000
+    # paid=200000, repair_discount=100000; status uses paid_amount only → partial
     r = client.patch(
         f"/payments/{pid}",
         json={"paid_amount": 200000, "repair_discount": 100000},
@@ -3056,9 +3104,34 @@ def test_dashboard_partial_missing_amount_uses_recognized_amount():
     items = client.get("/dashboard").json()
     item = next(i for i in items if i["rol"] == "DED02-00001")
 
-    assert item["actionable_payment_recognized_amount"] == 300000
+    # recognized_amount now equals paid_amount (not paid+deductions)
+    assert item["actionable_payment_recognized_amount"] == 200000
     assert item["actionable_payment_paid_amount"] == 200000
     assert item["actionable_payment_amount"] == expected
-    # Missing derived by frontend: expected - recognized = 200000 (not 300000 from paid_amount)
+    # Missing is now based on paid_amount: 500000 - 200000 = 300000
     missing_via_recognized = item["actionable_payment_amount"] - item["actionable_payment_recognized_amount"]
-    assert missing_via_recognized == 200000
+    assert missing_via_recognized == 300000
+
+
+def test_dashboard_alert_when_paid_below_expected_even_with_high_deductions():
+    """Period with paid_amount < expected triggers alert regardless of deduction amounts."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    cid = _make_deduction_dashboard_property("DED03-00001")
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]
+
+    # Pay only half but add large deductions — alert must still fire
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": expected // 2, "brokerage_fee": expected // 2},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "partial"
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "DED03-00001")
+    assert item["actionable_payment_period"] == current_period
+    assert item["actionable_payment_status"] == "partial"

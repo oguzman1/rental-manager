@@ -702,3 +702,303 @@ def test_bootstrap_clears_dashboard_historical_gap():
     item = next(i for i in items if i["id"] == pid)
     if item["actionable_payment_period"] is not None:
         assert item["actionable_payment_period"] >= today_ym
+
+
+# ─── Payment deductions ────────────────────────────────────────────────────────
+
+def _insert_test_payment(contract_id: int, period: str = "2030-01", paid: int | None = None) -> int:
+    return db.insert_payment(
+        contract_id=contract_id,
+        period=period,
+        due_date=f"{period}-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=paid,
+        paid_at=None,
+        status="paid" if paid and paid >= 500000 else ("partial" if paid else "pending"),
+    )
+
+
+def test_insert_payment_with_deductions_stores_rows():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-01",
+        due_date="2030-01-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=500000,
+        status="paid",
+        deductions=[
+            {"label": "Comisión corredora", "amount": 22647, "note": "Liquidación"},
+            {"label": "Reparación cocina", "amount": 35700, "note": None},
+        ],
+    )
+
+    result = db.get_payment(payment_id)
+    assert result is not None
+    assert len(result["deductions"]) == 2
+    labels = [d["label"] for d in result["deductions"]]
+    assert "Comisión corredora" in labels
+    assert "Reparación cocina" in labels
+    assert result["net_owner_amount"] == 500000 - 22647 - 35700
+
+
+def test_insert_payment_no_deductions_net_equals_paid():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = _insert_test_payment(cid, period="2030-02", paid=500000)
+    result = db.get_payment(payment_id)
+    assert result["deductions"] == []
+    assert result["net_owner_amount"] == 500000
+
+
+def test_update_payment_replaces_deductions():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-03",
+        due_date="2030-03-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=500000,
+        status="paid",
+        deductions=[{"label": "Original", "amount": 10000}],
+    )
+
+    db.update_payment(
+        payment_id=payment_id,
+        paid_amount=500000,
+        paid_at=None,
+        status="paid",
+        comment=None,
+        deductions=[
+            {"label": "Nueva comisión", "amount": 25000},
+            {"label": "Reparación", "amount": 15000},
+        ],
+    )
+
+    result = db.get_payment(payment_id)
+    assert len(result["deductions"]) == 2
+    labels = [d["label"] for d in result["deductions"]]
+    assert "Original" not in labels
+    assert "Nueva comisión" in labels
+    assert result["net_owner_amount"] == 500000 - 25000 - 15000
+
+
+def test_update_payment_none_deductions_keeps_existing():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-04",
+        due_date="2030-04-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=500000,
+        status="paid",
+        deductions=[{"label": "Honorarios corredora", "amount": 50000}],
+    )
+
+    db.update_payment(
+        payment_id=payment_id,
+        paid_amount=600000,
+        paid_at=None,
+        status="paid",
+        comment=None,
+        deductions=None,  # no change
+    )
+
+    result = db.get_payment(payment_id)
+    assert len(result["deductions"]) == 1
+    assert result["deductions"][0]["label"] == "Honorarios corredora"
+
+
+def test_update_payment_empty_list_clears_deductions():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-05",
+        due_date="2030-05-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=500000,
+        status="paid",
+        deductions=[{"label": "Honorarios corredora", "amount": 50000}],
+    )
+
+    db.update_payment(
+        payment_id=payment_id,
+        paid_amount=500000,
+        paid_at=None,
+        status="paid",
+        comment=None,
+        deductions=[],
+    )
+
+    result = db.get_payment(payment_id)
+    assert result["deductions"] == []
+    assert result["net_owner_amount"] == 500000
+
+
+def test_delete_payment_removes_deduction_rows():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-06",
+        due_date="2030-06-05",
+        expected_amount=500000,
+        comment=None,
+        deductions=[{"label": "Honorarios corredora", "amount": 50000}],
+    )
+
+    db.delete_payment(payment_id)
+
+    with db.get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM payment_deductions WHERE payment_id = ?", (payment_id,)
+        ).fetchone()[0]
+    assert count == 0
+
+
+def test_net_owner_amount_negative_when_deductions_exceed_paid():
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    payment_id = db.insert_payment(
+        contract_id=cid,
+        period="2030-07",
+        due_date="2030-07-05",
+        expected_amount=500000,
+        comment=None,
+        paid_amount=500000,
+        status="paid",
+        deductions=[{"label": "Gran descuento", "amount": 600000}],
+    )
+
+    result = db.get_payment(payment_id)
+    assert result["net_owner_amount"] == 500000 - 600000  # -100000
+    assert result["net_owner_amount"] < 0
+
+
+def test_list_payments_includes_deductions_no_n_plus_one():
+    """list_payments_for_contract loads deductions without N+1 queries."""
+    data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    cid = _get_contract_id(pid)
+
+    db.insert_payment(
+        contract_id=cid, period="2030-08", due_date="2030-08-05",
+        expected_amount=500000, comment=None, paid_amount=500000, status="paid",
+        deductions=[{"label": "Comisión A", "amount": 10000}],
+    )
+    db.insert_payment(
+        contract_id=cid, period="2030-09", due_date="2030-09-05",
+        expected_amount=500000, comment=None, paid_amount=500000, status="paid",
+        deductions=[{"label": "Comisión B", "amount": 20000}, {"label": "Reparación B", "amount": 5000}],
+    )
+
+    payments = db.list_payments_for_contract(cid)
+    # Payments are ordered period DESC, so 2030-09 first
+    p1 = next(p for p in payments if p["period"] == "2030-08")
+    p2 = next(p for p in payments if p["period"] == "2030-09")
+    assert len(p1["deductions"]) == 1
+    assert p1["deductions"][0]["label"] == "Comisión A"
+    assert len(p2["deductions"]) == 2
+    assert p2["net_owner_amount"] == 500000 - 20000 - 5000
+
+
+def _get_any_contract_id() -> int:
+    """Return the id of the first contract in the DB, creating one if none exist."""
+    with db.get_connection() as conn:
+        row = conn.execute("SELECT id FROM contracts LIMIT 1").fetchone()
+    if row:
+        return row[0]
+    from models import ManagedPropertyCreate
+    data = ManagedPropertyCreate(property=_make_property(rol="MIGR-00001"), rental=_make_rental())
+    pid = db.insert_managed_property(data)
+    return _get_contract_id(pid)
+
+
+def test_legacy_migration_converts_fixed_columns_to_deduction_rows():
+    """init_db migrates non-zero brokerage_fee/repair_discount/other_discount into
+    payment_deductions and zeroes the legacy columns."""
+    cid = _get_any_contract_id()
+
+    with db.get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payments
+                (contract_id, period, due_date, expected_amount, paid_amount, status,
+                 source, brokerage_fee, repair_discount, other_discount)
+            VALUES (?, '2029-01', '2029-01-05', 500000, 500000, 'paid', 'manual',
+                   22647, 35700, 0)
+            """,
+            (cid,),
+        )
+        conn.commit()
+        payment_id = cursor.lastrowid
+
+    db.init_db()
+
+    with db.get_connection() as conn:
+        ded_rows = conn.execute(
+            "SELECT label, amount FROM payment_deductions WHERE payment_id = ? ORDER BY sort_order",
+            (payment_id,),
+        ).fetchall()
+        legacy_row = conn.execute(
+            "SELECT brokerage_fee, repair_discount, other_discount FROM payments WHERE id = ?",
+            (payment_id,),
+        ).fetchone()
+
+    assert len(ded_rows) == 2
+    assert ded_rows[0] == ("Honorarios corredora", 22647)
+    assert ded_rows[1] == ("Descuento reparación", 35700)
+    assert legacy_row == (0, 0, 0)
+
+
+def test_legacy_migration_is_idempotent():
+    """Running init_db a second time does not duplicate deduction rows."""
+    cid = _get_any_contract_id()
+
+    with db.get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payments
+                (contract_id, period, due_date, expected_amount, paid_amount, status,
+                 source, brokerage_fee, repair_discount, other_discount)
+            VALUES (?, '2029-02', '2029-02-05', 500000, 500000, 'paid', 'manual',
+                   10000, 0, 0)
+            """,
+            (cid,),
+        )
+        conn.commit()
+        payment_id = cursor.lastrowid
+
+    db.init_db()  # first run: migrates
+    db.init_db()  # second run: guard fires (legacy cols already zero), no duplicates
+
+    with db.get_connection() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM payment_deductions WHERE payment_id = ?",
+            (payment_id,),
+        ).fetchone()[0]
+
+    assert count == 1

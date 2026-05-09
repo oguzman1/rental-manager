@@ -185,6 +185,60 @@ def init_db():
             if col not in payment_cols:
                 conn.execute(f"ALTER TABLE payments ADD COLUMN {col} {col_type}")
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payment_deductions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id INTEGER NOT NULL REFERENCES payments(id),
+                label      TEXT    NOT NULL,
+                amount     INTEGER NOT NULL CHECK(amount > 0),
+                note       TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payment_deductions_payment_id
+            ON payment_deductions(payment_id)
+            """
+        )
+
+        # One-time migration: move non-zero legacy deduction columns into payment_deductions.
+        # Guard ensures idempotency — once zeroed, this block never fires again.
+        legacy_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM payments
+            WHERE brokerage_fee > 0 OR repair_discount > 0 OR other_discount > 0
+            """
+        ).fetchone()[0]
+        if legacy_count > 0:
+            conn.execute(
+                """
+                INSERT INTO payment_deductions (payment_id, label, amount, sort_order)
+                SELECT id, 'Honorarios corredora', brokerage_fee, 0
+                FROM payments WHERE brokerage_fee > 0
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO payment_deductions (payment_id, label, amount, sort_order)
+                SELECT id, 'Descuento reparación', repair_discount, 1
+                FROM payments WHERE repair_discount > 0
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO payment_deductions (payment_id, label, amount, sort_order)
+                SELECT id, 'Otro descuento', other_discount, 2
+                FROM payments WHERE other_discount > 0
+                """
+            )
+            conn.execute(
+                "UPDATE payments SET brokerage_fee = 0, repair_discount = 0, other_discount = 0"
+            )
+
         conn.commit()
 
 
@@ -1405,6 +1459,60 @@ def get_contract_for_payment(contract_id: int) -> dict | None:
     return {"id": row[0], "payment_day": row[1], "current_rent": row[2]}
 
 
+def _load_deductions(conn, payment_id: int) -> list[dict]:
+    """Return deduction rows for a single payment, ordered by sort_order."""
+    rows = conn.execute(
+        """
+        SELECT id, label, amount, note, sort_order
+        FROM payment_deductions
+        WHERE payment_id = ?
+        ORDER BY sort_order
+        """,
+        (payment_id,),
+    ).fetchall()
+    return [{"id": r[0], "label": r[1], "amount": r[2], "note": r[3], "sort_order": r[4]} for r in rows]
+
+
+def _load_deductions_batch(conn, payment_ids: list[int]) -> dict[int, list[dict]]:
+    """Return a dict mapping payment_id → deduction rows for all given payment IDs."""
+    if not payment_ids:
+        return {}
+    placeholders = ",".join("?" * len(payment_ids))
+    rows = conn.execute(
+        f"""
+        SELECT id, payment_id, label, amount, note, sort_order
+        FROM payment_deductions
+        WHERE payment_id IN ({placeholders})
+        ORDER BY payment_id, sort_order
+        """,
+        payment_ids,
+    ).fetchall()
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        result.setdefault(r[1], []).append(
+            {"id": r[0], "label": r[2], "amount": r[3], "note": r[4], "sort_order": r[5]}
+        )
+    return result
+
+
+def _insert_deductions(conn, payment_id: int, deductions: list[dict]) -> None:
+    """Insert deduction rows for a payment. Caller owns the transaction."""
+    for i, d in enumerate(deductions):
+        conn.execute(
+            """
+            INSERT INTO payment_deductions (payment_id, label, amount, note, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (payment_id, d["label"], d["amount"], d.get("note") or None, i),
+        )
+
+
+def _replace_deductions(conn, payment_id: int, deductions: list[dict]) -> None:
+    """Delete and re-insert all deduction rows for a payment. Caller owns the transaction."""
+    conn.execute("DELETE FROM payment_deductions WHERE payment_id = ?", (payment_id,))
+    _insert_deductions(conn, payment_id, deductions)
+
+
 def insert_payment(
     contract_id: int,
     period: str,
@@ -1414,33 +1522,30 @@ def insert_payment(
     paid_amount: int | None = None,
     paid_at: str | None = None,
     status: str = "pending",
-    brokerage_fee: int = 0,
-    repair_discount: int = 0,
-    other_discount: int = 0,
+    deductions: list[dict] | None = None,
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO payments
-                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment,
-                 brokerage_fee, repair_discount, other_discount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment,
-             brokerage_fee, repair_discount, other_discount),
+            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment),
         )
+        payment_id = cursor.lastrowid
+        if deductions:
+            _insert_deductions(conn, payment_id, deductions)
         conn.commit()
-        return cursor.lastrowid
+        return payment_id
 
 
-def _payment_row_to_dict(row) -> dict:
+def _payment_row_to_dict(row, deductions: list[dict] | None = None) -> dict:
     paid = row[5]
     expected = row[4]
-    brokerage_fee = row[11]
-    repair_discount = row[12]
-    other_discount = row[13]
-    total_deductions = brokerage_fee + repair_discount + other_discount
-    recognized = paid or 0  # recognized_amount = paid_amount (legacy field, kept for compat)
+    deductions = deductions or []
+    total_deductions = sum(d["amount"] for d in deductions)
+    recognized = paid or 0  # recognized_amount = paid_amount (kept for compatibility)
     overpayment = max(0, paid - expected) if paid is not None else 0
     net_owner_amount = (paid or 0) - total_deductions
     return {
@@ -1455,9 +1560,7 @@ def _payment_row_to_dict(row) -> dict:
         "source": row[8],
         "comment": row[9],
         "created_at": row[10],
-        "brokerage_fee": brokerage_fee,
-        "repair_discount": repair_discount,
-        "other_discount": other_discount,
+        "deductions": deductions,
         "recognized_amount": recognized,
         "overpayment": overpayment,
         "net_owner_amount": net_owner_amount,
@@ -1633,7 +1736,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
         if row is None:
             raise LookupError("Payment not found.")
 
-        current = _payment_row_to_dict(row)
+        current = _payment_row_to_dict(row, _load_deductions(conn, row[0]))
         if current["overpayment"] <= 0:
             raise ValueError("No overpayment to apply.")
 
@@ -1698,7 +1801,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
             )
             next_id = cursor.lastrowid
         else:
-            next_dict = _payment_row_to_dict(next_row)
+            next_dict = _payment_row_to_dict(next_row, _load_deductions(conn, next_row[0]))
             next_id = next_dict["id"]
             expected_amount = next_dict["expected_amount"]
             current_paid = next_dict["paid_amount"] or 0
@@ -1719,12 +1822,10 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
 
         conn.commit()
 
-        updated_current = _payment_row_to_dict(
-            conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
-        )
-        updated_next = _payment_row_to_dict(
-            conn.execute("SELECT * FROM payments WHERE id = ?", (next_id,)).fetchone()
-        )
+        cur_row = conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
+        nxt_row = conn.execute("SELECT * FROM payments WHERE id = ?", (next_id,)).fetchone()
+        updated_current = _payment_row_to_dict(cur_row, _load_deductions(conn, payment_id))
+        updated_next = _payment_row_to_dict(nxt_row, _load_deductions(conn, next_id))
 
     return updated_current, updated_next
 
@@ -1735,8 +1836,10 @@ def list_payments_for_contract(contract_id: int) -> list[dict]:
             "SELECT * FROM payments WHERE contract_id = ? ORDER BY period DESC",
             (contract_id,),
         ).fetchall()
+        payment_ids = [r[0] for r in rows]
+        deductions_map = _load_deductions_batch(conn, payment_ids)
 
-    return [_payment_row_to_dict(row) for row in rows]
+    return [_payment_row_to_dict(row, deductions_map.get(row[0], [])) for row in rows]
 
 
 def get_payment(payment_id: int) -> dict | None:
@@ -1745,8 +1848,11 @@ def get_payment(payment_id: int) -> dict | None:
             "SELECT * FROM payments WHERE id = ?",
             (payment_id,),
         ).fetchone()
+        if row is None:
+            return None
+        deductions = _load_deductions(conn, payment_id)
 
-    return _payment_row_to_dict(row) if row else None
+    return _payment_row_to_dict(row, deductions)
 
 
 def update_payment(
@@ -1755,26 +1861,25 @@ def update_payment(
     paid_at: str | None,
     status: str,
     comment: str | None,
-    brokerage_fee: int = 0,
-    repair_discount: int = 0,
-    other_discount: int = 0,
+    deductions: list[dict] | None = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             """
             UPDATE payments
-            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?,
-                brokerage_fee = ?, repair_discount = ?, other_discount = ?
+            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
             WHERE id = ?
             """,
-            (paid_amount, paid_at, status, comment,
-             brokerage_fee, repair_discount, other_discount, payment_id),
+            (paid_amount, paid_at, status, comment, payment_id),
         )
+        if deductions is not None:
+            _replace_deductions(conn, payment_id, deductions)
         conn.commit()
 
 
 def delete_payment(payment_id: int) -> bool:
     with get_connection() as conn:
+        conn.execute("DELETE FROM payment_deductions WHERE payment_id = ?", (payment_id,))
         cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
         conn.commit()
     return cursor.rowcount > 0

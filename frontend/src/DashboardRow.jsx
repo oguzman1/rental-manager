@@ -1,5 +1,5 @@
 import { StatusBadge, PaymentBadge } from './Badge'
-import { formatCLP, formatPeriod, contractDuration, formatNextAdjustment, formatRentSince } from './utils'
+import { formatCLP, formatPeriod, formatPeriodLabel, contractDuration, formatNextAdjustment, formatRentSince } from './utils'
 
 function DashboardRow({ property, onClick }) {
   const since = formatRentSince(property.start_date, property.last_adjustment_date)
@@ -28,7 +28,11 @@ function DashboardRow({ property, onClick }) {
       </td>
       <td className="td">
         <PaymentBadge status={property.payment_status} />
-        <div className="td-sub">{formatPeriod(property.latest_period)}</div>
+        <div className="td-sub">
+          {property.payment_status === 'outstanding_balance' && property.actionable_payment_period
+            ? `Pendiente desde ${formatPeriodLabel(property.actionable_payment_period)}`
+            : formatPeriod(property.latest_period)}
+        </div>
       </td>
       <td className="td td-mono td-muted">
         <div>{formatNextAdjustment(property.next_adjustment_date) ?? <span className="text-muted">—</span>}</div>

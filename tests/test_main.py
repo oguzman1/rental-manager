@@ -573,17 +573,26 @@ def test_delete_payment_unknown_returns_404():
     assert response.json()["detail"] == "Payment not found."
 
 
-def test_delete_payment_actually_removes_it():
+def test_delete_payment_keeps_period_as_pending():
     cid = _setup_payment_property()
+    # Mark 2025-12 as paid first
     payment = client.post(
-        f"/contracts/{cid}/payments", json={"period": "2025-12"}
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-12", "paid_amount": 500000, "paid_at": "2025-12-05"},
     ).json()
     payment_id = payment["id"]
+    assert payment["status"] == "paid"
 
     client.delete(f"/payments/{payment_id}")
 
     remaining = client.get(f"/contracts/{cid}/payments").json()
-    assert payment_id not in [p["id"] for p in remaining]
+    match = next((p for p in remaining if p["id"] == payment_id), None)
+    assert match is not None, "Period row must remain after delete"
+    assert match["status"] == "pending"
+    assert match["paid_amount"] is None
+    assert match["paid_at"] is None
+    assert match["expected_amount"] == 500000
+    assert match["period"] == "2025-12"
 
 
 def test_dashboard_current_payment_status_none_when_no_payment():
@@ -3354,30 +3363,31 @@ def test_net_owner_amount_returned_in_payment_response():
     assert body["net_owner_amount"] == expected
 
 
-def test_delete_payment_removes_deduction_rows():
-    """DELETE /payments/{id} also removes its deduction rows."""
+def test_delete_payment_clears_deductions_keeps_period():
+    """DELETE /payments/{id} clears deductions and resets the period to pending."""
     cid = _setup_payment_property()
     r = client.post(
         f"/contracts/{cid}/payments",
         json={
             "period": "2031-03",
+            "paid_amount": 450000,
             "deductions": [{"label": "Honorarios corredora", "amount": 50000}],
         },
     )
     assert r.status_code == 200
     pid = r.json()["id"]
+    assert r.json()["recognized_amount"] == 500000
 
     r = client.delete(f"/payments/{pid}")
     assert r.status_code == 204
 
-    # Deduction rows should be gone too
-    import sqlite3 as _sqlite3
-    conn = _sqlite3.connect("test_rental_manager.db")
-    count = conn.execute(
-        "SELECT COUNT(*) FROM payment_deductions WHERE payment_id = ?", (pid,)
-    ).fetchone()[0]
-    conn.close()
-    assert count == 0
+    # Period must still exist with deductions cleared
+    remaining = client.get(f"/contracts/{cid}/payments").json()
+    match = next((p for p in remaining if p["id"] == pid), None)
+    assert match is not None, "Period row must remain after delete"
+    assert match["status"] == "pending"
+    assert match["deductions"] == []
+    assert match["recognized_amount"] == 0
 
 
 def test_blank_label_is_rejected():
@@ -4057,3 +4067,119 @@ def test_acceptance_edit_deduction_recalculates_status():
     assert body["recognized_amount"] == 470000   # unchanged
     assert body["net_owner_amount"] == 420000    # 470000 − 50000
     assert len(body["owner_expenses"]) == 1
+
+
+# ── Delete/clear payment semantics ──────────────────────────────────────────
+
+def test_delete_partial_payment_resets_to_pending():
+    """Deleting a partial period resets it to pending, row preserved."""
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2040-01", "paid_amount": 200000, "paid_at": "2040-01-05"},
+    )
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    assert r.json()["status"] == "partial"
+
+    assert client.delete(f"/payments/{pid}").status_code == 204
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    match = next((p for p in payments if p["id"] == pid), None)
+    assert match is not None, "Partial period row must remain after delete"
+    assert match["status"] == "pending"
+    assert match["paid_amount"] is None
+    assert match["paid_at"] is None
+
+
+def test_delete_payment_clears_owner_expenses():
+    """DELETE /payments/{id} clears owner_expenses; period stays pending."""
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2040-02",
+            "paid_amount": 500000,
+            "owner_expenses": [{"label": "Gastos comunes", "amount": 30000}],
+        },
+    )
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    assert r.json()["net_owner_amount"] == 470000
+
+    assert client.delete(f"/payments/{pid}").status_code == 204
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    match = next((p for p in payments if p["id"] == pid), None)
+    assert match is not None, "Period row must remain after delete"
+    assert match["status"] == "pending"
+    assert match["owner_expenses"] == []
+    assert match["net_owner_amount"] == 0
+
+
+def test_delete_payment_no_sequence_gap():
+    """Deleting a middle period must not create a gap in the monthly sequence.
+
+    The _PAYMENT_PROPERTY contract auto-generates 2023-01 through 2023-12.
+    PATCH 2023-06 to paid, then DELETE it — the period must stay in the list.
+    """
+    cid = _setup_payment_property()
+    # 2023-06 is pre-created as pending; PATCH it to paid.
+    payments_before = client.get(f"/contracts/{cid}/payments").json()
+    p = next((p for p in payments_before if p["period"] == "2023-06"), None)
+    assert p is not None, "2023-06 must be auto-generated for this contract"
+    pid = p["id"]
+
+    client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 500000, "paid_at": "2023-06-05"},
+    )
+
+    assert client.delete(f"/payments/{pid}").status_code == 204
+
+    periods = [p["period"] for p in client.get(f"/contracts/{cid}/payments").json()]
+    assert "2023-05" in periods, "Month before deleted period must still exist"
+    assert "2023-06" in periods, "Deleted period must still exist (no gap)"
+    assert "2023-07" in periods, "Month after deleted period must still exist"
+
+
+def test_delete_payment_comment_cleared():
+    """DELETE clears the payment comment."""
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2040-03", "paid_amount": 500000, "comment": "Pago en efectivo"},
+    )
+    assert r.status_code == 200
+    pid = r.json()["id"]
+
+    assert client.delete(f"/payments/{pid}").status_code == 204
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    match = next((p for p in payments if p["id"] == pid), None)
+    assert match is not None
+    assert match["comment"] is None
+
+
+def test_delete_payment_recognized_resets():
+    """After delete, recognized_amount resets to 0 (no paid, no deductions)."""
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2040-04",
+            "paid_amount": 470000,
+            "deductions": [{"label": "Corredora", "amount": 30000}],
+        },
+    )
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    assert r.json()["recognized_amount"] == 500000
+
+    assert client.delete(f"/payments/{pid}").status_code == 204
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    match = next((p for p in payments if p["id"] == pid), None)
+    assert match is not None
+    assert match["recognized_amount"] == 0
+    assert match["status"] == "pending"

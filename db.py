@@ -2006,9 +2006,22 @@ def update_payment(
 
 
 def delete_payment(payment_id: int) -> bool:
+    """Clear payment data while keeping the period row in the schedule.
+
+    Resets paid_amount, paid_at, status, comment and removes deductions and
+    owner_expenses. The payment period row itself is preserved so the monthly
+    contract cycle has no gaps.
+    """
     with get_connection() as conn:
         conn.execute("DELETE FROM payment_deductions WHERE payment_id = ?", (payment_id,))
         conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id = ?", (payment_id,))
-        cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET paid_amount = NULL, paid_at = NULL, status = 'pending', comment = NULL
+            WHERE id = ?
+            """,
+            (payment_id,),
+        )
         conn.commit()
     return cursor.rowcount > 0

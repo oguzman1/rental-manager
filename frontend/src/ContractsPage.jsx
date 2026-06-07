@@ -33,6 +33,12 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
   const [fCurrentDocumentFilename, setFCurrentDocumentFilename] = useState(null)
   const fileInputRef = useRef(null)
 
+  // contract adjustment config fields
+  const [fBrokerEnabled, setFBrokerEnabled] = useState(false)
+  const [fUsualBrokerFee, setFUsualBrokerFee] = useState('')
+  const [fOwnerPaysGgcc, setFOwnerPaysGgcc] = useState(false)
+  const [fEditingLabel, setFEditingLabel] = useState('')
+
   async function loadContracts() {
     setIsLoading(true)
     setError(null)
@@ -78,6 +84,10 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
     setFDocumentFile(null)
     setFCurrentDocumentFilename(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
+    setFBrokerEnabled(false)
+    setFUsualBrokerFee('')
+    setFOwnerPaysGgcc(false)
+    setFEditingLabel('')
     setFormError(null)
   }
 
@@ -113,6 +123,10 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
       setFComment(data.comment ?? '')
       setFDocumentUrl(data.contract_document_url ?? '')
       setFCurrentDocumentFilename(data.contract_document_filename ?? null)
+      setFBrokerEnabled(data.broker_fee_enabled ?? false)
+      setFUsualBrokerFee(data.usual_broker_fee ? formatAmountInput(String(data.usual_broker_fee)) : '')
+      setFOwnerPaysGgcc(data.owner_pays_ggcc ?? false)
+      setFEditingLabel(data.property_label ?? '')
     } catch (err) {
       setFormError(`Error al cargar contrato: ${err.message}`)
     }
@@ -140,6 +154,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
               adjustment_month: fAdjMonth.trim() || null,
               comment: fComment.trim() || null,
               contract_document_url: fDocumentUrl.trim() || null,
+              broker_fee_enabled: fBrokerEnabled,
+              usual_broker_fee: fBrokerEnabled ? (parseAmountInput(fUsualBrokerFee) || null) : null,
+              owner_pays_ggcc: fOwnerPaysGgcc,
             }),
           })
         : await fetch(`${API_BASE}/contracts`, {
@@ -241,7 +258,11 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
           <div className="form-scroll">
             <form onSubmit={handleSubmit}>
               <div className="form-section-label">
-                {activeForm.type === 'create' ? 'Nuevo contrato' : 'Editar contrato'}
+                {activeForm.type === 'create'
+                  ? 'Nuevo contrato'
+                  : fEditingLabel
+                  ? `Editar contrato — ${fEditingLabel}`
+                  : 'Editar contrato'}
               </div>
 
               {activeForm.type === 'create' && (
@@ -403,6 +424,47 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                   </label>
                 </div>
               )}
+
+              <div className="contract-config-section">
+                <div className="contract-config-label">Configuración de cobros y gastos</div>
+                <label className="contract-config-check">
+                  <input
+                    type="checkbox"
+                    checked={fBrokerEnabled}
+                    onChange={(e) => setFBrokerEnabled(e.target.checked)}
+                  />
+                  Este contrato tiene corredora
+                </label>
+                {fBrokerEnabled && (
+                  <label className="payment-form-label" style={{ maxWidth: 260 }}>
+                    Corredora habitual
+                    <input
+                      className="payment-form-input"
+                      type="text"
+                      inputMode="numeric"
+                      value={fUsualBrokerFee}
+                      onChange={(e) => setFUsualBrokerFee(formatAmountInput(e.target.value))}
+                      placeholder="ej. 30.000"
+                    />
+                    <span className="contract-config-hint">
+                      La corredora permite imputar diferencias en el modal de pagos.
+                    </span>
+                  </label>
+                )}
+                <label className="contract-config-check">
+                  <input
+                    type="checkbox"
+                    checked={fOwnerPaysGgcc}
+                    onChange={(e) => setFOwnerPaysGgcc(e.target.checked)}
+                  />
+                  Yo pago los GG.CC.
+                </label>
+                {fOwnerPaysGgcc && (
+                  <span className="contract-config-hint">
+                    Los GG.CC. se registran como gasto dueño y no afectan si el arriendo está pagado.
+                  </span>
+                )}
+              </div>
 
               <div className="payment-form-actions" style={{ marginTop: 20 }}>
                 <button className="btn-primary" type="submit" disabled={isSubmitting}>

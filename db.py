@@ -106,6 +106,9 @@ def init_db():
             ("contract_document_mime_type", "TEXT"),
             ("contract_document_size_bytes", "INTEGER"),
             ("contract_document_uploaded_at", "TEXT"),
+            ("broker_fee_enabled", "INTEGER NOT NULL DEFAULT 0"),
+            ("usual_broker_fee", "INTEGER"),
+            ("owner_pays_ggcc", "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE contracts ADD COLUMN {col} {col_type}")
@@ -202,6 +205,26 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS idx_payment_deductions_payment_id
             ON payment_deductions(payment_id)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS owner_monthly_expenses (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id INTEGER NOT NULL REFERENCES payments(id),
+                label      TEXT    NOT NULL,
+                amount     INTEGER NOT NULL CHECK(amount > 0),
+                note       TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_owner_monthly_expenses_payment_id
+            ON owner_monthly_expenses(payment_id)
             """
         )
 
@@ -804,9 +827,13 @@ def list_dashboard_items() -> list[dict]:
                 SELECT
                     contract_id,
                     CASE
-                        WHEN COALESCE(paid_amount, 0) >= expected_amount THEN 'paid'
-                        WHEN COALESCE(paid_amount, 0) > 0               THEN 'partial'
-                        ELSE                                                  'pending'
+                        WHEN COALESCE(paid_amount, 0) + COALESCE(
+                                 (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = payments.id), 0
+                             ) >= expected_amount THEN 'paid'
+                        WHEN COALESCE(paid_amount, 0) + COALESCE(
+                                 (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = payments.id), 0
+                             ) > 0               THEN 'partial'
+                        ELSE                         'pending'
                     END AS status
                 FROM payments
                 WHERE period = strftime('%Y-%m', 'now')
@@ -815,7 +842,11 @@ def list_dashboard_items() -> list[dict]:
                 SELECT
                     contract_id,
                     COUNT(*)                                      AS total_exigibles,
-                    SUM(expected_amount - COALESCE(paid_amount, 0)) AS saldo_pendiente
+                    SUM(expected_amount - (
+                        COALESCE(paid_amount, 0) + COALESCE(
+                            (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = payments.id), 0
+                        )
+                    )) AS saldo_pendiente
                 FROM payments
                 WHERE period <= strftime('%Y-%m', 'now')
                 GROUP BY contract_id
@@ -838,19 +869,24 @@ def list_dashboard_items() -> list[dict]:
                     p1.contract_id,
                     p1.period          AS actionable_payment_period,
                     CASE
-                        WHEN COALESCE(p1.paid_amount, 0) = 0 THEN 'pending'
+                        WHEN COALESCE(p1.paid_amount, 0) + COALESCE(
+                                 (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = p1.id), 0
+                             ) = 0 THEN 'pending'
                         ELSE 'partial'
                     END                AS actionable_payment_status,
                     p1.expected_amount AS actionable_payment_amount,
                     p1.paid_amount     AS actionable_payment_paid_amount,
-                    COALESCE(p1.paid_amount, 0)
-                                       AS actionable_payment_recognized_amount
+                    COALESCE(p1.paid_amount, 0) + COALESCE(
+                        (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = p1.id), 0
+                    )                  AS actionable_payment_recognized_amount
                 FROM payments p1
                 INNER JOIN (
                     SELECT contract_id, MIN(period) AS min_period
                     FROM   payments
                     WHERE  period <= strftime('%Y-%m', 'now')
-                      AND  COALESCE(paid_amount, 0) < expected_amount
+                      AND  COALESCE(paid_amount, 0) + COALESCE(
+                               (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = payments.id), 0
+                           ) < expected_amount
                     GROUP BY contract_id
                 ) p3 ON p1.contract_id = p3.contract_id
                      AND p1.period      = p3.min_period
@@ -964,7 +1000,10 @@ def list_contracts() -> list[dict]:
                 c.contract_document_filename,
                 c.contract_document_mime_type,
                 c.contract_document_size_bytes,
-                c.contract_document_uploaded_at
+                c.contract_document_uploaded_at,
+                c.broker_fee_enabled,
+                c.usual_broker_fee,
+                c.owner_pays_ggcc
             FROM contracts c
             JOIN properties p
                 ON p.id = c.property_id
@@ -999,6 +1038,9 @@ def list_contracts() -> list[dict]:
             "contract_document_mime_type": row[15],
             "contract_document_size_bytes": row[16],
             "contract_document_uploaded_at": row[17],
+            "broker_fee_enabled": bool(row[18]),
+            "usual_broker_fee": row[19],
+            "owner_pays_ggcc": bool(row[20]),
         }
         for row in rows
     ]
@@ -1028,7 +1070,10 @@ def get_contract(contract_id: int) -> dict | None:
                 c.contract_document_filename,
                 c.contract_document_mime_type,
                 c.contract_document_size_bytes,
-                c.contract_document_uploaded_at
+                c.contract_document_uploaded_at,
+                c.broker_fee_enabled,
+                c.usual_broker_fee,
+                c.owner_pays_ggcc
             FROM contracts c
             JOIN properties p ON p.id = c.property_id
             JOIN contract_tenants ct ON ct.contract_id = c.id AND ct.is_primary = 1
@@ -1063,6 +1108,9 @@ def get_contract(contract_id: int) -> dict | None:
         "contract_document_mime_type": row[17],
         "contract_document_size_bytes": row[18],
         "contract_document_uploaded_at": row[19],
+        "broker_fee_enabled": bool(row[20]),
+        "usual_broker_fee": row[21],
+        "owner_pays_ggcc": bool(row[22]),
     }
 
 
@@ -1153,6 +1201,12 @@ def update_contract(contract_id: int, data) -> bool:
             updates["comment"] = data.comment
         if "contract_document_url" in data.model_fields_set:
             updates["contract_document_url"] = data.contract_document_url
+        if "broker_fee_enabled" in data.model_fields_set and data.broker_fee_enabled is not None:
+            updates["broker_fee_enabled"] = int(data.broker_fee_enabled)
+        if "usual_broker_fee" in data.model_fields_set:
+            updates["usual_broker_fee"] = data.usual_broker_fee
+        if "owner_pays_ggcc" in data.model_fields_set and data.owner_pays_ggcc is not None:
+            updates["owner_pays_ggcc"] = int(data.owner_pays_ggcc)
 
         if updates:
             set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -1513,6 +1567,60 @@ def _replace_deductions(conn, payment_id: int, deductions: list[dict]) -> None:
     _insert_deductions(conn, payment_id, deductions)
 
 
+def _load_owner_expenses(conn, payment_id: int) -> list[dict]:
+    """Return owner_monthly_expenses rows for a single payment, ordered by sort_order."""
+    rows = conn.execute(
+        """
+        SELECT id, label, amount, note, sort_order
+        FROM owner_monthly_expenses
+        WHERE payment_id = ?
+        ORDER BY sort_order
+        """,
+        (payment_id,),
+    ).fetchall()
+    return [{"id": r[0], "label": r[1], "amount": r[2], "note": r[3], "sort_order": r[4]} for r in rows]
+
+
+def _load_owner_expenses_batch(conn, payment_ids: list[int]) -> dict[int, list[dict]]:
+    """Return a dict mapping payment_id → owner_monthly_expenses rows for all given payment IDs."""
+    if not payment_ids:
+        return {}
+    placeholders = ",".join("?" * len(payment_ids))
+    rows = conn.execute(
+        f"""
+        SELECT id, payment_id, label, amount, note, sort_order
+        FROM owner_monthly_expenses
+        WHERE payment_id IN ({placeholders})
+        ORDER BY payment_id, sort_order
+        """,
+        payment_ids,
+    ).fetchall()
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        result.setdefault(r[1], []).append(
+            {"id": r[0], "label": r[2], "amount": r[3], "note": r[4], "sort_order": r[5]}
+        )
+    return result
+
+
+def _insert_owner_expenses(conn, payment_id: int, owner_expenses: list[dict]) -> None:
+    """Insert owner_monthly_expenses rows for a payment. Caller owns the transaction."""
+    for i, e in enumerate(owner_expenses):
+        conn.execute(
+            """
+            INSERT INTO owner_monthly_expenses (payment_id, label, amount, note, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (payment_id, e["label"], e["amount"], e.get("note") or None, i),
+        )
+
+
+def _replace_owner_expenses(conn, payment_id: int, owner_expenses: list[dict]) -> None:
+    """Delete and re-insert all owner_monthly_expenses rows for a payment. Caller owns the transaction."""
+    conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id = ?", (payment_id,))
+    _insert_owner_expenses(conn, payment_id, owner_expenses)
+
+
 def insert_payment(
     contract_id: int,
     period: str,
@@ -1523,6 +1631,7 @@ def insert_payment(
     paid_at: str | None = None,
     status: str = "pending",
     deductions: list[dict] | None = None,
+    owner_expenses: list[dict] | None = None,
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
@@ -1536,18 +1645,28 @@ def insert_payment(
         payment_id = cursor.lastrowid
         if deductions:
             _insert_deductions(conn, payment_id, deductions)
+        if owner_expenses:
+            _insert_owner_expenses(conn, payment_id, owner_expenses)
         conn.commit()
         return payment_id
 
 
-def _payment_row_to_dict(row, deductions: list[dict] | None = None) -> dict:
+def _payment_row_to_dict(
+    row,
+    deductions: list[dict] | None = None,
+    owner_expenses: list[dict] | None = None,
+) -> dict:
     paid = row[5]
     expected = row[4]
     deductions = deductions or []
+    owner_expenses = owner_expenses or []
     total_deductions = sum(d["amount"] for d in deductions)
-    recognized = paid or 0  # recognized_amount = paid_amount (kept for compatibility)
+    total_owner_expenses = sum(e["amount"] for e in owner_expenses)
+    # recognized_amount = paid_amount + Σ deductions (rent-recognizing credits)
+    recognized = (paid or 0) + total_deductions
     overpayment = max(0, paid - expected) if paid is not None else 0
-    net_owner_amount = (paid or 0) - total_deductions
+    # net_owner_amount = paid_amount − Σ owner_expenses (NOT deductions)
+    net_owner_amount = (paid or 0) - total_owner_expenses
     return {
         "id": row[0],
         "contract_id": row[1],
@@ -1561,6 +1680,7 @@ def _payment_row_to_dict(row, deductions: list[dict] | None = None) -> dict:
         "comment": row[9],
         "created_at": row[10],
         "deductions": deductions,
+        "owner_expenses": owner_expenses,
         "recognized_amount": recognized,
         "overpayment": overpayment,
         "net_owner_amount": net_owner_amount,
@@ -1736,7 +1856,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
         if row is None:
             raise LookupError("Payment not found.")
 
-        current = _payment_row_to_dict(row, _load_deductions(conn, row[0]))
+        current = _payment_row_to_dict(row, _load_deductions(conn, row[0]), _load_owner_expenses(conn, row[0]))
         if current["overpayment"] <= 0:
             raise ValueError("No overpayment to apply.")
 
@@ -1801,7 +1921,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
             )
             next_id = cursor.lastrowid
         else:
-            next_dict = _payment_row_to_dict(next_row, _load_deductions(conn, next_row[0]))
+            next_dict = _payment_row_to_dict(next_row, _load_deductions(conn, next_row[0]), _load_owner_expenses(conn, next_row[0]))
             next_id = next_dict["id"]
             expected_amount = next_dict["expected_amount"]
             current_paid = next_dict["paid_amount"] or 0
@@ -1824,8 +1944,8 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
 
         cur_row = conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
         nxt_row = conn.execute("SELECT * FROM payments WHERE id = ?", (next_id,)).fetchone()
-        updated_current = _payment_row_to_dict(cur_row, _load_deductions(conn, payment_id))
-        updated_next = _payment_row_to_dict(nxt_row, _load_deductions(conn, next_id))
+        updated_current = _payment_row_to_dict(cur_row, _load_deductions(conn, payment_id), _load_owner_expenses(conn, payment_id))
+        updated_next = _payment_row_to_dict(nxt_row, _load_deductions(conn, next_id), _load_owner_expenses(conn, next_id))
 
     return updated_current, updated_next
 
@@ -1838,8 +1958,12 @@ def list_payments_for_contract(contract_id: int) -> list[dict]:
         ).fetchall()
         payment_ids = [r[0] for r in rows]
         deductions_map = _load_deductions_batch(conn, payment_ids)
+        owner_expenses_map = _load_owner_expenses_batch(conn, payment_ids)
 
-    return [_payment_row_to_dict(row, deductions_map.get(row[0], [])) for row in rows]
+    return [
+        _payment_row_to_dict(row, deductions_map.get(row[0], []), owner_expenses_map.get(row[0], []))
+        for row in rows
+    ]
 
 
 def get_payment(payment_id: int) -> dict | None:
@@ -1851,8 +1975,9 @@ def get_payment(payment_id: int) -> dict | None:
         if row is None:
             return None
         deductions = _load_deductions(conn, payment_id)
+        owner_expenses = _load_owner_expenses(conn, payment_id)
 
-    return _payment_row_to_dict(row, deductions)
+    return _payment_row_to_dict(row, deductions, owner_expenses)
 
 
 def update_payment(
@@ -1862,6 +1987,7 @@ def update_payment(
     status: str,
     comment: str | None,
     deductions: list[dict] | None = None,
+    owner_expenses: list[dict] | None = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
@@ -1874,12 +2000,15 @@ def update_payment(
         )
         if deductions is not None:
             _replace_deductions(conn, payment_id, deductions)
+        if owner_expenses is not None:
+            _replace_owner_expenses(conn, payment_id, owner_expenses)
         conn.commit()
 
 
 def delete_payment(payment_id: int) -> bool:
     with get_connection() as conn:
         conn.execute("DELETE FROM payment_deductions WHERE payment_id = ?", (payment_id,))
+        conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id = ?", (payment_id,))
         cursor = conn.execute("DELETE FROM payments WHERE id = ?", (payment_id,))
         conn.commit()
     return cursor.rowcount > 0

@@ -1626,6 +1626,202 @@ def test_list_contracts_includes_notice_days_and_comment():
     assert "contract_document_url" in contract
 
 
+# --- Contract config fields: broker_fee_enabled, usual_broker_fee, owner_pays_ggcc ---
+
+
+def _make_contract_for_config(rol: str, rent: int = 500000) -> dict:
+    """Create a property+tenant+contract and return the contract detail JSON."""
+    r_prop = client.post("/managed-property", json={
+        "property": {
+            "comuna": "TEST",
+            "rol": rol,
+            "address": f"Test {rol}",
+            "destination": "HABITACIONAL",
+            "status": "vacant",
+        },
+        "rental": None,
+    })
+    assert r_prop.status_code == 200
+    prop_id = r_prop.json()["id"]
+
+    r_tenant = client.post("/tenants", json={"display_name": f"Tenant {rol}"})
+    assert r_tenant.status_code == 200
+    tenant_id = r_tenant.json()["id"]
+
+    r = client.post("/contracts", json={
+        "property_id": prop_id,
+        "tenant_id": tenant_id,
+        "start_date": "2024-01-01",
+        "payment_day": 5,
+        "notice_days": 30,
+        "adjustment_frequency": "annual",
+        "adjustment_month": "january",
+        "current_rent": rent,
+    })
+    assert r.status_code == 200
+    return r.json()
+
+
+def test_contract_config_defaults_on_create():
+    """Newly created contract has broker_fee_enabled=False, usual_broker_fee=None, owner_pays_ggcc=False."""
+    body = _make_contract_for_config("CFG-DEFAULT-001")
+    assert body["broker_fee_enabled"] is False
+    assert body["usual_broker_fee"] is None
+    assert body["owner_pays_ggcc"] is False
+
+
+def test_get_contract_includes_config_fields():
+    """GET /contracts/{id} returns all three config fields."""
+    body = _make_contract_for_config("CFG-GET-001")
+    cid = body["id"]
+    r = client.get(f"/contracts/{cid}")
+    assert r.status_code == 200
+    detail = r.json()
+    assert "broker_fee_enabled" in detail
+    assert "usual_broker_fee" in detail
+    assert "owner_pays_ggcc" in detail
+    assert detail["broker_fee_enabled"] is False
+    assert detail["usual_broker_fee"] is None
+    assert detail["owner_pays_ggcc"] is False
+
+
+def test_patch_contract_enables_broker_fee():
+    """PATCH /contracts/{id} can enable broker_fee_enabled and set usual_broker_fee."""
+    body = _make_contract_for_config("CFG-BROKER-001")
+    cid = body["id"]
+
+    r = client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 30000,
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["broker_fee_enabled"] is True
+    assert updated["usual_broker_fee"] == 30000
+    assert updated["owner_pays_ggcc"] is False  # unchanged
+
+    # Verify persisted via GET
+    r2 = client.get(f"/contracts/{cid}")
+    assert r2.json()["broker_fee_enabled"] is True
+    assert r2.json()["usual_broker_fee"] == 30000
+
+
+def test_patch_contract_enables_ggcc():
+    """PATCH /contracts/{id} can enable owner_pays_ggcc."""
+    body = _make_contract_for_config("CFG-GGCC-001")
+    cid = body["id"]
+
+    r = client.patch(f"/contracts/{cid}", json={"owner_pays_ggcc": True})
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["owner_pays_ggcc"] is True
+    assert updated["broker_fee_enabled"] is False  # unchanged
+    assert updated["usual_broker_fee"] is None      # unchanged
+
+    # Verify persisted
+    r2 = client.get(f"/contracts/{cid}")
+    assert r2.json()["owner_pays_ggcc"] is True
+
+
+def test_patch_contract_broker_and_ggcc_together():
+    """Can set broker and GG.CC. config in a single PATCH."""
+    body = _make_contract_for_config("CFG-BOTH-001")
+    cid = body["id"]
+
+    r = client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 25000,
+        "owner_pays_ggcc": True,
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["broker_fee_enabled"] is True
+    assert updated["usual_broker_fee"] == 25000
+    assert updated["owner_pays_ggcc"] is True
+
+
+def test_patch_contract_clears_broker_fee():
+    """Can disable broker_fee_enabled and clear usual_broker_fee back to None."""
+    body = _make_contract_for_config("CFG-CLEAR-001")
+    cid = body["id"]
+
+    # Enable first
+    client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 30000,
+    })
+
+    # Now clear
+    r = client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": False,
+        "usual_broker_fee": None,
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["broker_fee_enabled"] is False
+    assert updated["usual_broker_fee"] is None
+
+
+def test_patch_contract_omitting_config_fields_preserves_them():
+    """A PATCH that omits broker/ggcc fields must not reset them."""
+    body = _make_contract_for_config("CFG-PRESERVE-001")
+    cid = body["id"]
+
+    # Set config
+    client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 30000,
+        "owner_pays_ggcc": True,
+    })
+
+    # PATCH only payment_day — config fields must survive
+    r = client.patch(f"/contracts/{cid}", json={"payment_day": 10})
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["payment_day"] == 10
+    assert updated["broker_fee_enabled"] is True
+    assert updated["usual_broker_fee"] == 30000
+    assert updated["owner_pays_ggcc"] is True
+
+
+def test_list_contracts_includes_config_fields():
+    """GET /contracts list items include broker/ggcc config fields."""
+    body = _make_contract_for_config("CFG-LIST-001")
+    cid = body["id"]
+
+    client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 40000,
+    })
+
+    r = client.get("/contracts")
+    assert r.status_code == 200
+    items = r.json()
+    match = next((i for i in items if i["id"] == cid), None)
+    assert match is not None
+    assert match["broker_fee_enabled"] is True
+    assert match["usual_broker_fee"] == 40000
+    assert match["owner_pays_ggcc"] is False
+
+
+def test_patch_contract_existing_fields_unaffected_by_config():
+    """Adding config fields to ContractUpdate does not break existing PATCH behavior (payment_day, rent)."""
+    body = _make_contract_for_config("CFG-COMPAT-001", rent=400000)
+    cid = body["id"]
+
+    r = client.patch(f"/contracts/{cid}", json={
+        "payment_day": 15,
+        "notice_days": 60,
+    })
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["payment_day"] == 15
+    assert updated["notice_days"] == 60
+    assert updated["broker_fee_enabled"] is False  # untouched default
+    assert updated["usual_broker_fee"] is None
+    assert updated["owner_pays_ggcc"] is False
+
+
 def test_create_contract_with_document_url():
     r_prop = client.post("/managed-property", json={
         "property": {
@@ -2835,7 +3031,7 @@ def test_deductions_default_to_empty():
 
 
 def test_create_payment_with_multiple_deductions():
-    """POST with deductions list → response includes rows and correct net_owner_amount."""
+    """POST with deductions list → response includes rows; recognized = paid + deductions; net = paid (no owner_expenses)."""
     cid = _setup_payment_property()
     expected = 500000
     r = client.post(
@@ -2854,12 +3050,14 @@ def test_create_payment_with_multiple_deductions():
     assert body["status"] == "paid"
     assert body["paid_amount"] == expected
     assert body["overpayment"] == 0
-    assert body["recognized_amount"] == expected
+    # recognized_amount = paid + Σ deductions
+    assert body["recognized_amount"] == expected + 22647 + 35700
     assert len(body["deductions"]) == 2
     labels = [d["label"] for d in body["deductions"]]
     assert "Comisión corredora" in labels
     assert "Reparación cocina" in labels
-    assert body["net_owner_amount"] == expected - 22647 - 35700  # 441653
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
 
 
 def test_full_rent_paid_with_deductions_status_paid():
@@ -2884,13 +3082,15 @@ def test_full_rent_paid_with_deductions_status_paid():
     body = r.json()
     assert body["status"] == "paid"
     assert body["overpayment"] == 0
-    assert body["recognized_amount"] == expected
-    assert body["net_owner_amount"] == expected - 50000 - 30000  # 420000
+    # recognized_amount = paid + Σ deductions = 500000 + 50000 + 30000 = 580000
+    assert body["recognized_amount"] == expected + 50000 + 30000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
     assert len(body["deductions"]) == 2
 
 
 def test_paid_below_expected_with_deductions_still_partial():
-    """paid_amount < expected → status partial regardless of deduction amounts."""
+    """paid + deductions < expected → status partial; recognized = paid + deductions."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-04"})
     pid = r.json()["id"]
@@ -2905,9 +3105,11 @@ def test_paid_below_expected_with_deductions_still_partial():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "partial"
-    assert body["recognized_amount"] == 200000  # recognized = paid_amount
+    # recognized_amount = paid + Σ deductions = 200000 + 100000 = 300000 (still < 500000)
+    assert body["recognized_amount"] == 300000
     assert body["overpayment"] == 0
-    assert body["net_owner_amount"] == 100000  # 200000 - 100000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == 200000
 
 
 def test_deductions_allowed_when_paid_equals_expected():
@@ -2927,11 +3129,12 @@ def test_deductions_allowed_when_paid_equals_expected():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "paid"
-    assert body["net_owner_amount"] == expected - 200000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
 
 
-def test_negative_net_owner_amount_is_allowed():
-    """Deductions may exceed paid_amount; net_owner_amount can be negative."""
+def test_large_deductions_do_not_make_net_negative():
+    """Deductions do NOT affect net_owner_amount; only owner_expenses do."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2030-06"})
     pid = r.json()["id"]
@@ -2946,8 +3149,10 @@ def test_negative_net_owner_amount_is_allowed():
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["net_owner_amount"] == expected - 600000  # -100000
-    assert body["net_owner_amount"] < 0
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected  # 500000, NOT negative
+    # recognized_amount = paid + deductions = 500000 + 600000 = 1100000
+    assert body["recognized_amount"] == expected + 600000
 
 
 def test_brokerage_liquidation_full_case():
@@ -2971,8 +3176,10 @@ def test_brokerage_liquidation_full_case():
     assert body["status"] == "paid"
     assert body["paid_amount"] == expected
     assert body["overpayment"] == 0
-    assert body["recognized_amount"] == expected
-    assert body["net_owner_amount"] == expected - 22647 - 35700  # 441653
+    # recognized_amount = paid + Σ deductions = 500000 + 22647 + 35700 = 558347
+    assert body["recognized_amount"] == expected + 22647 + 35700
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
     assert len(body["deductions"]) == 2
 
 
@@ -3037,7 +3244,8 @@ def test_patch_without_deductions_keeps_existing_rows():
     assert body["overpayment"] == 100000
     assert len(body["deductions"]) == 1
     assert body["deductions"][0]["label"] == "Honorarios corredora"
-    assert body["net_owner_amount"] == 600000 - 200000  # 400000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == 600000
 
 
 def test_patch_with_empty_deductions_clears_rows():
@@ -3098,11 +3306,12 @@ def test_patch_with_deductions_replaces_existing_rows():
     assert "Nueva comisión" in labels
     assert "Nueva reparación" in labels
     assert "Original deduction" not in labels
-    assert body["net_owner_amount"] == expected - 25000 - 15000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
 
 
-def test_deductions_without_cash_do_not_affect_status():
-    """Deductions without a cash payment leave status pending."""
+def test_deductions_without_cash_set_status_paid_when_recognized_reaches_expected():
+    """Deductions without cash payment: recognized = 0 + deductions; status = paid when recognized >= expected."""
     cid = _setup_payment_property()
     r = client.post(
         f"/contracts/{cid}/payments",
@@ -3115,13 +3324,14 @@ def test_deductions_without_cash_do_not_affect_status():
     body = r.json()
     assert body["paid_amount"] is None
     assert len(body["deductions"]) == 1
-    assert body["recognized_amount"] == 0
-    assert body["status"] == "pending"
+    # recognized = paid(0) + deductions(500000) = 500000 = expected → status paid
+    assert body["recognized_amount"] == 500000
+    assert body["status"] == "paid"
     assert body["overpayment"] == 0
 
 
 def test_net_owner_amount_returned_in_payment_response():
-    """net_owner_amount is present in PaymentResponse and equals paid - sum(deductions)."""
+    """net_owner_amount is present in PaymentResponse and equals paid - sum(owner_expenses)."""
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2031-02"})
     pid = r.json()["id"]
@@ -3140,7 +3350,8 @@ def test_net_owner_amount_returned_in_payment_response():
     assert r.status_code == 200
     body = r.json()
     assert "net_owner_amount" in body
-    assert body["net_owner_amount"] == expected - 22647 - 35700
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert body["net_owner_amount"] == expected
 
 
 def test_delete_payment_removes_deduction_rows():
@@ -3208,6 +3419,153 @@ def test_deduction_negative_amount_is_rejected():
     assert r.status_code == 422
 
 
+# ─── Corrected semantics tests ────────────────────────────────────────────────
+# These tests verify the new payment semantics:
+#   recognized_amount = paid + Σ deductions
+#   status = paid when recognized >= expected (even if paid < expected)
+#   net_owner_amount = paid - Σ owner_expenses (NOT deductions)
+#   owner_expenses do NOT affect status or recognized_amount
+
+def test_recognized_amount_equals_paid_plus_deductions():
+    """recognized_amount = paid_amount + Σ deductions (not just paid_amount)."""
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2032-01"})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={
+            "paid_amount": 400000,
+            "deductions": [{"label": "Honorarios corredora", "amount": 75000}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["recognized_amount"] == 400000 + 75000  # 475000
+
+
+def test_status_paid_when_recognized_reaches_expected_via_deductions():
+    """Status = paid when paid + Σ deductions >= expected, even if paid < expected."""
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2032-02"})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={
+            "paid_amount": 300000,
+            "deductions": [{"label": "Honorarios corredora", "amount": 200000}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # paid(300000) < expected(500000) but recognized(500000) = expected → status paid
+    assert body["recognized_amount"] == 500000
+    assert body["status"] == "paid"
+    assert body["paid_amount"] == 300000
+
+
+def test_net_owner_amount_uses_owner_expenses_not_deductions():
+    """net_owner_amount = paid - Σ owner_expenses; deductions do NOT affect it."""
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2032-03"})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={
+            "paid_amount": expected,
+            "deductions": [{"label": "Honorarios corredora", "amount": 50000}],
+            "owner_expenses": [{"label": "GG.CC.", "amount": 30000}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # net_owner_amount = paid - owner_expenses = 500000 - 30000 = 470000
+    assert body["net_owner_amount"] == expected - 30000  # 470000
+    # recognized = paid + deductions = 500000 + 50000 = 550000
+    assert body["recognized_amount"] == expected + 50000
+    assert body["status"] == "paid"
+    assert len(body["owner_expenses"]) == 1
+    assert body["owner_expenses"][0]["label"] == "GG.CC."
+
+
+def test_owner_expenses_do_not_affect_status():
+    """owner_expenses do NOT affect status or recognized_amount."""
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2032-04"})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={
+            "paid_amount": 300000,
+            "owner_expenses": [{"label": "GG.CC.", "amount": 200000}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # owner_expenses do NOT add to recognized_amount
+    assert body["recognized_amount"] == 300000  # only paid_amount, no deductions
+    # status based on recognized (no deductions), so partial
+    assert body["status"] == "partial"
+    # net_owner_amount = paid - owner_expenses = 300000 - 200000 = 100000
+    assert body["net_owner_amount"] == 100000
+
+
+def test_ggcc_and_broker_combined_case():
+    """GG.CC. (owner_expenses) + broker fee (deduction) combined scenario."""
+    cid = _setup_payment_property()
+    expected = 500000
+
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2032-05",
+            "paid_amount": 450000,
+            "deductions": [{"label": "Honorarios corredora", "amount": 50000}],
+            "owner_expenses": [{"label": "GG.CC.", "amount": 80000}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    # recognized = paid(450000) + deductions(50000) = 500000 = expected → paid
+    assert body["recognized_amount"] == 500000
+    assert body["status"] == "paid"
+    # net_owner_amount = paid(450000) - owner_expenses(80000) = 370000
+    assert body["net_owner_amount"] == 370000
+    assert len(body["deductions"]) == 1
+    assert body["deductions"][0]["label"] == "Honorarios corredora"
+    assert len(body["owner_expenses"]) == 1
+    assert body["owner_expenses"][0]["label"] == "GG.CC."
+
+
+def test_owner_expenses_returned_in_payment_list():
+    """list payments includes owner_expenses per payment."""
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2032-06",
+            "paid_amount": 500000,
+            "owner_expenses": [{"label": "Gastos comunes", "amount": 45000}],
+        },
+    )
+    assert r.status_code == 200
+
+    r = client.get(f"/contracts/{cid}/payments")
+    assert r.status_code == 200
+    payments = r.json()
+    p = next(p for p in payments if p["period"] == "2032-06")
+    assert len(p["owner_expenses"]) == 1
+    assert p["owner_expenses"][0]["label"] == "Gastos comunes"
+    assert p["owner_expenses"][0]["amount"] == 45000
+
+
 # ─── Dashboard deduction tests ────────────────────────────────────────────────
 # Use start_date = first day of next month so generate_payment_periods creates
 # no rows and the virtual-period logic (start_ym > cap_ym) is skipped, giving
@@ -3273,8 +3631,8 @@ def test_dashboard_full_paid_with_deductions_no_alert():
     assert item["actionable_payment_period"] is None
 
 
-def test_dashboard_partial_missing_amount_uses_paid_amount():
-    """Dashboard partial: missing amount is based on paid_amount, not deductions."""
+def test_dashboard_partial_missing_amount_uses_recognized_amount():
+    """Dashboard partial: missing amount is based on recognized (paid + deductions), not raw paid_amount."""
     current_period = datetime.date.today().strftime("%Y-%m")
     cid = _make_deduction_dashboard_property("DED02-00001")
 
@@ -3295,15 +3653,16 @@ def test_dashboard_partial_missing_amount_uses_paid_amount():
     items = client.get("/dashboard").json()
     item = next(i for i in items if i["rol"] == "DED02-00001")
 
-    assert item["actionable_payment_recognized_amount"] == 200000
+    # recognized = 200000 + 100000 = 300000; still partial (< 500000)
+    assert item["actionable_payment_recognized_amount"] == 300000
     assert item["actionable_payment_paid_amount"] == 200000
     assert item["actionable_payment_amount"] == expected
     missing_via_recognized = item["actionable_payment_amount"] - item["actionable_payment_recognized_amount"]
-    assert missing_via_recognized == 300000
+    assert missing_via_recognized == 200000  # 500000 - 300000
 
 
-def test_dashboard_alert_when_paid_below_expected_even_with_high_deductions():
-    """Period with paid_amount < expected triggers alert regardless of deduction amounts."""
+def test_dashboard_no_alert_when_deductions_cover_expected():
+    """paid=half, deductions=half → recognized=expected → status paid; dashboard must NOT show as actionable."""
     current_period = datetime.date.today().strftime("%Y-%m")
     cid = _make_deduction_dashboard_property("DED03-00001")
 
@@ -3320,9 +3679,381 @@ def test_dashboard_alert_when_paid_below_expected_even_with_high_deductions():
         },
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "partial"
+    assert r.json()["status"] == "paid"  # recognized = expected → paid
 
     items = client.get("/dashboard").json()
     item = next(i for i in items if i["rol"] == "DED03-00001")
+
+    assert item["current_payment_status"] == "paid"    # cp subquery must use recognized
+    assert item["actionable_payment_period"] is None    # ap filter must use recognized, not raw paid
+
+
+def test_dashboard_deduction_covers_gap_period_not_actionable():
+    """broker deduction closes the gap → recognized=expected → period NOT in actionable filter."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    cid = _make_deduction_dashboard_property("DED05-00001")
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # paid=470000, deduction=30000 → recognized=500000 → paid
+    client.patch(f"/payments/{pid}", json={
+        "paid_amount": 470000,
+        "deductions": [{"label": "Honorarios corredora", "amount": 30000}],
+    })
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "DED05-00001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] is None
+
+
+def test_dashboard_partial_deduction_still_actionable():
+    """paid + deductions < expected → period still appears as actionable."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    cid = _make_deduction_dashboard_property("DED06-00001")
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # paid=300000, deduction=100000 → recognized=400000 < 500000 → partial
+    client.patch(f"/payments/{pid}", json={
+        "paid_amount": 300000,
+        "deductions": [{"label": "Descuento reparación", "amount": 100000}],
+    })
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "DED06-00001")
+    assert item["current_payment_status"] == "partial"
     assert item["actionable_payment_period"] == current_period
-    assert item["actionable_payment_status"] == "partial"
+    assert item["actionable_payment_recognized_amount"] == 400000
+
+
+def test_dashboard_owner_expenses_do_not_affect_payment_status():
+    """GG.CC./owner_expenses do not count toward recognized — payment with GG.CC. only is still pending."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    cid = _make_deduction_dashboard_property("DED07-00001")
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # paid_amount=500000, owner_expenses=80000 → recognized=500000 (expenses don't count)
+    client.patch(f"/payments/{pid}", json={
+        "paid_amount": expected,
+        "owner_expenses": [{"label": "Gastos comunes", "amount": 80000}],
+    })
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "DED07-00001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] is None
+
+
+def test_dashboard_saldo_uses_recognized_not_paid():
+    """saldo_pendiente must subtract recognized (paid + deductions) from expected, not just paid."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    cid = _make_deduction_dashboard_property("DED08-00001")
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # paid=400000, deduction=100000 → recognized=500000 → saldo_pendiente for this period = 0
+    client.patch(f"/payments/{pid}", json={
+        "paid_amount": 400000,
+        "deductions": [{"label": "Honorarios corredora", "amount": 100000}],
+    })
+
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "DED08-00001")
+    # If saldo_pendiente uses paid only: 500000 - 400000 = 100000 → outstanding_balance
+    # If saldo_pendiente uses recognized: 500000 - 500000 = 0 → paid_up
+    assert item["payment_status"] == "paid_up"
+
+
+# ─── Acceptance tests: real user scenarios ────────────────────────────────────
+
+
+def _make_acceptance_contract(rol: str, rent: int = 500000) -> dict:
+    """Create property (occupied via rental) + contract. Returns contract detail dict."""
+    today = datetime.date.today()
+    # Use a far-future start_date so generate_payment_periods produces no rows
+    # and each test controls exactly which period it creates.
+    if today.month == 12:
+        start = f"{today.year + 1}-01-01"
+    else:
+        start = f"{today.year}-{today.month + 1:02d}-01"
+
+    r = client.post("/managed-property", json={
+        "property": {
+            "comuna": "SANTIAGO",
+            "rol": rol,
+            "address": f"Calle Aceptación {rol}",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "ACC",
+            "property_number": "ACC",
+            "year": 2024,
+            "fiscal_appraisal": 100000000,
+        },
+        "rental": {
+            "tenant_name": f"Arrendatario {rol}",
+            "payment_day": 5,
+            "property_label": f"depto {rol}",
+            "current_rent": rent,
+            "adjustment_frequency": "annual",
+            "start_date": start,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    })
+    assert r.status_code == 200
+    cid = _get_contract_id_for_rol(rol)
+    r2 = client.get(f"/contracts/{cid}")
+    assert r2.status_code == 200
+    return r2.json()
+
+
+# ── Scenario 1: simple property — no broker, no GG.CC. ───────────────────────
+
+def test_acceptance_simple_payment_no_broker_no_ggcc():
+    """Simple property: paid=expected → paid, recognized=paid, net=paid, no deductions needed."""
+    contract = _make_acceptance_contract("ACC-SIMPLE-001", rent=500000)
+    cid = contract["id"]
+    assert contract["broker_fee_enabled"] is False
+    assert contract["owner_pays_ggcc"] is False
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2045-01"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": expected})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["recognized_amount"] == expected
+    assert body["net_owner_amount"] == expected
+    assert body["deductions"] == []
+    assert body["owner_expenses"] == []
+
+
+# ── Scenario 2: Estación Central — broker fee closes the gap ─────────────────
+
+def test_acceptance_estacion_central_broker_closes_gap():
+    """EC case: paid=250k, deduction(Corredora)=30k → recognized=280k=expected → paid."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    contract = _make_acceptance_contract("ACC-EC-001", rent=280000)
+    cid = contract["id"]
+
+    # Configure broker fee on the contract
+    r = client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 30000,
+    })
+    assert r.status_code == 200
+    assert r.json()["broker_fee_enabled"] is True
+    assert r.json()["usual_broker_fee"] == 30000
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 280000
+
+    r = client.patch(f"/payments/{pid}", json={
+        "paid_amount": 250000,
+        "deductions": [{"label": "Corredora", "amount": 30000}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected_amount"] == 280000
+    assert body["paid_amount"] == 250000
+    assert body["recognized_amount"] == 280000   # 250000 + 30000
+    assert body["status"] == "paid"
+    assert body["net_owner_amount"] == 250000     # paid only — deduction is not out-of-pocket
+    assert len(body["deductions"]) == 1
+    assert body["deductions"][0]["label"] == "Corredora"
+    assert body["deductions"][0]["amount"] == 30000
+
+    # Dashboard must NOT show this period as actionable
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "ACC-EC-001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] is None
+
+
+# ── Scenario 3: Estación Central — larger gap remains partial ────────────────
+
+def test_acceptance_estacion_central_larger_gap_stays_partial():
+    """EC case: diff=60k > usual_fee=30k; only 30k imputed → recognized=250k < 280k → partial."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    contract = _make_acceptance_contract("ACC-EC-002", rent=280000)
+    cid = contract["id"]
+
+    client.patch(f"/contracts/{cid}", json={
+        "broker_fee_enabled": True,
+        "usual_broker_fee": 30000,
+    })
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+
+    # paid=220000, only usual fee 30000 imputed — 60000 gap NOT fully covered
+    r = client.patch(f"/payments/{pid}", json={
+        "paid_amount": 220000,
+        "deductions": [{"label": "Corredora", "amount": 30000}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected_amount"] == 280000
+    assert body["paid_amount"] == 220000
+    assert body["recognized_amount"] == 250000   # 220000 + 30000
+    assert body["status"] == "partial"           # 250000 < 280000
+    missing = body["expected_amount"] - body["recognized_amount"]
+    assert missing == 30000
+
+    # Dashboard must still show this as actionable
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "ACC-EC-002")
+    assert item["current_payment_status"] == "partial"
+    assert item["actionable_payment_period"] == current_period
+    assert item["actionable_payment_recognized_amount"] == 250000
+
+
+# ── Scenario 4: multiple deductions in one month ─────────────────────────────
+
+def test_acceptance_multiple_deductions_cover_expected():
+    """paid=430k + Corredora(30k) + Reparación(40k) = 500k → paid; both deductions preserved."""
+    contract = _make_acceptance_contract("ACC-MULTI-001", rent=500000)
+    cid = contract["id"]
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2045-04"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(f"/payments/{pid}", json={
+        "paid_amount": 430000,
+        "deductions": [
+            {"label": "Corredora", "amount": 30000},
+            {"label": "Reparación descontada", "amount": 40000},
+        ],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected_amount"] == 500000
+    assert body["paid_amount"] == 430000
+    assert body["recognized_amount"] == 500000   # 430000 + 30000 + 40000
+    assert body["status"] == "paid"
+    assert body["net_owner_amount"] == 430000     # paid only (no owner_expenses)
+    assert len(body["deductions"]) == 2
+    labels = {d["label"] for d in body["deductions"]}
+    assert labels == {"Corredora", "Reparación descontada"}
+
+
+# ── Scenario 5: La Serena — owner pays GG.CC. ────────────────────────────────
+
+def test_acceptance_la_serena_owner_pays_ggcc():
+    """LS case: paid=500k, owner_expenses(GG.CC.)=80k → recognized=500k, net=420k, paid."""
+    current_period = datetime.date.today().strftime("%Y-%m")
+    contract = _make_acceptance_contract("ACC-LS-001", rent=500000)
+    cid = contract["id"]
+
+    r = client.patch(f"/contracts/{cid}", json={"owner_pays_ggcc": True})
+    assert r.status_code == 200
+    assert r.json()["owner_pays_ggcc"] is True
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": current_period})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    r = client.patch(f"/payments/{pid}", json={
+        "paid_amount": 500000,
+        "owner_expenses": [{"label": "Gastos comunes (GG.CC.)", "amount": 80000}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected_amount"] == 500000
+    assert body["paid_amount"] == 500000
+    assert body["recognized_amount"] == 500000   # deductions=0; owner_expenses don't count
+    assert body["status"] == "paid"
+    assert body["net_owner_amount"] == 420000    # 500000 − 80000
+    assert len(body["owner_expenses"]) == 1
+    assert body["owner_expenses"][0]["label"] == "Gastos comunes (GG.CC.)"
+    assert body["owner_expenses"][0]["amount"] == 80000
+    assert body["deductions"] == []
+
+    # Dashboard: GG.CC. must not make this actionable
+    items = client.get("/dashboard").json()
+    item = next(i for i in items if i["rol"] == "ACC-LS-001")
+    assert item["current_payment_status"] == "paid"
+    assert item["actionable_payment_period"] is None
+
+
+# ── Scenario 6: La Serena — GG.CC. omitted does not block payment ────────────
+
+def test_acceptance_la_serena_ggcc_omitted_does_not_block_payment():
+    """LS case: paid=expected with no owner_expenses → status still paid, net=paid."""
+    contract = _make_acceptance_contract("ACC-LS-002", rent=500000)
+    cid = contract["id"]
+
+    client.patch(f"/contracts/{cid}", json={"owner_pays_ggcc": True})
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2045-06"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # Full rent paid, GG.CC. not recorded yet
+    r = client.patch(f"/payments/{pid}", json={"paid_amount": expected})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["recognized_amount"] == expected
+    assert body["net_owner_amount"] == expected   # no expenses → net = paid
+    assert body["owner_expenses"] == []
+
+
+# ── Scenario 7: edit/delete deduction recalculates correctly ─────────────────
+
+def test_acceptance_edit_deduction_recalculates_status():
+    """Remove deduction that was covering gap → status drops to partial.
+    Then add owner_expense → status unchanged, only net_owner_amount changes."""
+    contract = _make_acceptance_contract("ACC-EDIT-001", rent=500000)
+    cid = contract["id"]
+
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2045-07"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+    expected = r.json()["expected_amount"]  # 500000
+
+    # Step A: paid=470k + deduction=30k → recognized=500k → paid
+    r = client.patch(f"/payments/{pid}", json={
+        "paid_amount": 470000,
+        "deductions": [{"label": "Corredora", "amount": 30000}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "paid"
+    assert body["recognized_amount"] == 500000
+
+    # Step B: remove the deduction → recognized drops to 470k → partial
+    r = client.patch(f"/payments/{pid}", json={"deductions": []})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    assert body["recognized_amount"] == 470000
+    assert body["paid_amount"] == 470000
+    assert body["deductions"] == []
+
+    # Step C: add owner_expense → status stays partial, net drops
+    r = client.patch(f"/payments/{pid}", json={
+        "owner_expenses": [{"label": "Gastos comunes", "amount": 50000}],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"           # owner_expenses don't help recognized
+    assert body["recognized_amount"] == 470000   # unchanged
+    assert body["net_owner_amount"] == 420000    # 470000 − 50000
+    assert len(body["owner_expenses"]) == 1

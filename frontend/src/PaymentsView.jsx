@@ -104,6 +104,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [formDate, setFormDate] = useState(todayLocal())
   const [formNote, setFormNote] = useState('')
   const [formDeductions, setFormDeductions] = useState([])
+  const [formGgcc, setFormGgcc] = useState('')
 
   // Edit form
   const [editPayment, setEditPayment] = useState(null)
@@ -111,6 +112,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const [editDate, setEditDate] = useState('')
   const [editNote, setEditNote] = useState('')
   const [editDeductions, setEditDeductions] = useState([])
+  const [editGgcc, setEditGgcc] = useState('')
 
   // Overpayment
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
@@ -184,6 +186,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
 
   function openAdd() {
     setFormDeductions([])
+    setFormGgcc('')
     if (payments.length === 0) {
       setFormPeriod('')
       setFormUseCustom(true)
@@ -227,6 +230,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     }
     setFormPeriod(value)
     setFormDeductions([])
+    setFormGgcc('')
     const p = payments.find(py => py.period === value)
     if (p) {
       setFormAmount(formatAmountInput(getPrefillAmount(p)))
@@ -250,6 +254,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         note: d.note ?? '',
       }))
     )
+    const existingGgcc = (payment.owner_expenses ?? []).find(e => isGgccExpense(e))
+    setEditGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
     setFormError(null)
     setActiveForm('edit')
   }
@@ -300,6 +306,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         formDate,
         formNote,
         formDeductions: normalizedDeds,
+        formOwnerExpenses: mergeGgccOwnerExpense([], formGgcc),
         paymentId: existing?.id ?? null,
         nextPeriod,
         nextPayment,
@@ -329,6 +336,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_at: formDate || null,
             comment: formNote || null,
             deductions: normalizedDeds,
+            owner_expenses: mergeGgccOwnerExpense([], formGgcc),
           }),
         })
         if (res.status === 409) {
@@ -388,6 +396,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       if (editDate !== '') body.paid_at = editDate
       if (editNote !== '') body.comment = editNote
       body.deductions = dedResult.deductions
+      body.owner_expenses = mergeGgccOwnerExpense(editPayment.owner_expenses, editGgcc)
       const res = await fetch(`${API_BASE}/payments/${editPayment.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -451,7 +460,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   // applyAfter=false: saves only, no transfer (Case C — next period fully paid).
   async function saveFromDraft(applyAfter) {
     if (!pendingOverpaymentDraft) return
-    const { period, paymentId, originPaidAfter, formDate, formNote, formDeductions: draftDeductions } = pendingOverpaymentDraft
+    const { period, paymentId, originPaidAfter, formDate, formNote, formDeductions: draftDeductions, formOwnerExpenses: draftOwnerExpenses } = pendingOverpaymentDraft
     setIsSubmitting(true)
     setFormError(null)
     setOverpaymentError(null)
@@ -481,6 +490,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_at: formDate || null,
             comment: formNote || null,
             deductions: draftDeductions ?? [],
+            owner_expenses: draftOwnerExpenses ?? [],
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -520,12 +530,79 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const addTotalDeductions = addFormIsNewRow
     ? formDeductions.reduce((s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0)
     : 0
-  const addNetOwnerAmount = (formAmount !== '' ? parseAmountInput(formAmount) : 0) - addTotalDeductions
-
   const editTotalDeductions = editDeductions.reduce(
     (s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0
   )
-  const editNetOwnerAmount = (editAmount !== '' ? parseAmountInput(editAmount) : 0) - editTotalDeductions
+
+  // Broker helper computed values
+  const brokerEnabled = contract.broker_fee_enabled === true
+  const usualBrokerFee = contract.usual_broker_fee ?? 0
+
+  const addPaidAmt = formAmount !== '' ? parseAmountInput(formAmount) : 0
+  const addExpected = contract.current_rent ?? 0
+  const addBrokerDedAmt = (() => {
+    const b = formDeductions.find(d => d.label === 'Corredora')
+    return b && b.amount !== '' ? parseAmountInput(b.amount) : 0
+  })()
+  const addNonBrokerDeds = addTotalDeductions - addBrokerDedAmt
+  const addBrokerDiff = addExpected - addPaidAmt - addNonBrokerDeds
+  const addRecognized = addPaidAmt + addTotalDeductions
+  const addMissing = Math.max(0, addExpected - addRecognized)
+
+  const editPaidAmt = editAmount !== '' ? parseAmountInput(editAmount) : 0
+  const editExpected = editPayment?.expected_amount ?? 0
+  const editBrokerDedAmt = (() => {
+    const b = editDeductions.find(d => d.label === 'Corredora')
+    return b && b.amount !== '' ? parseAmountInput(b.amount) : 0
+  })()
+  const editNonBrokerDeds = editTotalDeductions - editBrokerDedAmt
+  const editBrokerDiff = editExpected - editPaidAmt - editNonBrokerDeds
+  const editRecognized = editPaidAmt + editTotalDeductions
+  const editMissing = Math.max(0, editExpected - editRecognized)
+
+  const ggccEnabled = contract.owner_pays_ggcc === true
+
+  function sumOwnerExpenses(expenses) {
+    return (expenses ?? []).reduce((s, e) => s + (e.amount ?? 0), 0)
+  }
+
+  const addMergedOwnerExpenses = mergeGgccOwnerExpense([], formGgcc)
+  const addOwnerExpenseTotal = sumOwnerExpenses(addMergedOwnerExpenses)
+  const addNetOwner = addPaidAmt - addOwnerExpenseTotal
+
+  const editMergedOwnerExpenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
+  const editOwnerExpenseTotal = sumOwnerExpenses(editMergedOwnerExpenses)
+  const editNetOwner = editPaidAmt - editOwnerExpenseTotal
+
+  function isGgccExpense(expense) {
+    const label = (expense.label ?? '').toLowerCase()
+    return label.includes('gastos comunes') || label.includes('gg.cc')
+  }
+
+  function mergeGgccOwnerExpense(existingOwnerExpenses, ggccStr) {
+    const others = (existingOwnerExpenses ?? []).filter(e => !isGgccExpense(e))
+    const amt = ggccStr !== '' ? parseAmountInput(ggccStr) : 0
+    if (amt <= 0) return others
+    return [...others, { label: 'Gastos comunes', amount: amt, note: null }]
+  }
+
+  function imputarCorredora(diff, deductions, setDeductions) {
+    const toImpute = Math.min(Math.max(0, diff), usualBrokerFee)
+    if (toImpute <= 0) return
+    const amtStr = formatAmountInput(String(toImpute))
+    const idx = deductions.findIndex(d => d.label === 'Corredora')
+    if (idx >= 0) {
+      setDeductions(prev => prev.map((r, i) => i === idx ? { ...r, amount: amtStr } : r))
+    } else {
+      setDeductions(prev => [...prev, { label: 'Corredora', amount: amtStr, note: '' }])
+    }
+  }
+
+  function statusPreview(recognized, expected) {
+    if (recognized >= expected) return 'Pagado'
+    if (recognized > 0) return 'Parcial'
+    return 'Pendiente'
+  }
 
   // Build the inline confirmation panel JSX once, shared by add and edit forms.
   let overpaymentPanel = null
@@ -825,11 +902,58 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                       + Agregar descuento
                     </button>
                   )}
-                  {addTotalDeductions > 0 && (
+                  {brokerEnabled && !pendingOverpaymentDraft && (
+                    <div className="broker-helper">
+                      <span className="broker-helper-label">Corredora</span>
+                      <span className="broker-helper-diff">
+                        Diferencia: <strong>{formatCLP(addBrokerDiff)}</strong>
+                        {addBrokerDiff > usualBrokerFee && (
+                          <span className="text-muted">
+                            {' · '}Corredora: {formatCLP(usualBrokerFee)}
+                            {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addBrokerDiff - usualBrokerFee)}</strong>
+                          </span>
+                        )}
+                      </span>
+                      {addBrokerDiff > 0 && usualBrokerFee > 0 && (
+                        <button
+                          type="button"
+                          className="btn-link-secondary"
+                          onClick={() => imputarCorredora(addBrokerDiff, formDeductions, setFormDeductions)}
+                        >
+                          Imputar diferencia a corredora
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                    Esperado: {formatCLP(addExpected)}
+                    {' · '}Pagado: {formatCLP(addPaidAmt)}
+                    {addTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(addTotalDeductions)}</>}
+                    {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addRecognized)}</strong>
+                    {addMissing > 0 && (
+                      <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addMissing)}</strong></>
+                    )}
+                    {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(addRecognized, addExpected)}</strong>
+                    {ggccEnabled && addOwnerExpenseTotal > 0 && (
+                      <>{' · '}Gasto dueño: {formatCLP(addOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwner)}</strong></>
+                    )}
+                  </span>
+                </div>
+              )}
+              {ggccEnabled && !pendingOverpaymentDraft && addFormIsNewRow && (
+                <div className="ggcc-section">
+                  <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
+                  <input
+                    className="payment-form-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={formGgcc}
+                    onChange={e => setFormGgcc(formatAmountInput(e.target.value))}
+                    placeholder="Monto GG.CC."
+                  />
+                  {formGgcc === '' && (
                     <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                      Total descuentos: {formatCLP(addTotalDeductions)}
-                      {' · '}Neto dueño:{' '}
-                      <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwnerAmount)}</strong>
+                      Puedes registrar los GG.CC. después.
                     </span>
                   )}
                 </div>
@@ -944,14 +1068,61 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                     + Agregar descuento
                   </button>
                 )}
-                {editTotalDeductions > 0 && (
-                  <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                    Total descuentos: {formatCLP(editTotalDeductions)}
-                    {' · '}Neto dueño:{' '}
-                    <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwnerAmount)}</strong>
-                  </span>
+                {brokerEnabled && !pendingOverpaymentDraft && (
+                  <div className="broker-helper">
+                    <span className="broker-helper-label">Corredora</span>
+                    <span className="broker-helper-diff">
+                      Diferencia: <strong>{formatCLP(editBrokerDiff)}</strong>
+                      {editBrokerDiff > usualBrokerFee && (
+                        <span className="text-muted">
+                          {' · '}Corredora: {formatCLP(usualBrokerFee)}
+                          {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editBrokerDiff - usualBrokerFee)}</strong>
+                        </span>
+                      )}
+                    </span>
+                    {editBrokerDiff > 0 && usualBrokerFee > 0 && (
+                      <button
+                        type="button"
+                        className="btn-link-secondary"
+                        onClick={() => imputarCorredora(editBrokerDiff, editDeductions, setEditDeductions)}
+                      >
+                        Imputar diferencia a corredora
+                      </button>
+                    )}
+                  </div>
                 )}
+                <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                  Esperado: {formatCLP(editExpected)}
+                  {' · '}Pagado: {formatCLP(editPaidAmt)}
+                  {editTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(editTotalDeductions)}</>}
+                  {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editRecognized)}</strong>
+                  {editMissing > 0 && (
+                    <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editMissing)}</strong></>
+                  )}
+                  {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(editRecognized, editExpected)}</strong>
+                  {ggccEnabled && editOwnerExpenseTotal > 0 && (
+                    <>{' · '}Gasto dueño: {formatCLP(editOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwner)}</strong></>
+                  )}
+                </span>
               </div>
+              {ggccEnabled && !pendingOverpaymentDraft && (
+                <div className="ggcc-section">
+                  <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
+                  <input
+                    className="payment-form-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={editGgcc}
+                    onChange={e => setEditGgcc(formatAmountInput(e.target.value))}
+                    placeholder="Monto GG.CC."
+                  />
+                  {editGgcc === '' && (
+                    <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                      Puedes registrar los GG.CC. después.
+                    </span>
+                  )}
+                </div>
+              )}
               {!pendingOverpaymentDraft && (
                 <div className="payment-form-actions">
                   <button className="btn-primary" type="submit" disabled={isSubmitting}>

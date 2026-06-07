@@ -744,7 +744,8 @@ def test_insert_payment_with_deductions_stores_rows():
     labels = [d["label"] for d in result["deductions"]]
     assert "Comisión corredora" in labels
     assert "Reparación cocina" in labels
-    assert result["net_owner_amount"] == 500000 - 22647 - 35700
+    # net_owner_amount = paid - owner_expenses (NOT deductions); no owner_expenses here
+    assert result["net_owner_amount"] == 500000
 
 
 def test_insert_payment_no_deductions_net_equals_paid():
@@ -791,7 +792,8 @@ def test_update_payment_replaces_deductions():
     labels = [d["label"] for d in result["deductions"]]
     assert "Original" not in labels
     assert "Nueva comisión" in labels
-    assert result["net_owner_amount"] == 500000 - 25000 - 15000
+    # net_owner_amount = paid - owner_expenses (NOT deductions); no owner_expenses here
+    assert result["net_owner_amount"] == 500000
 
 
 def test_update_payment_none_deductions_keeps_existing():
@@ -877,7 +879,8 @@ def test_delete_payment_removes_deduction_rows():
     assert count == 0
 
 
-def test_net_owner_amount_negative_when_deductions_exceed_paid():
+def test_net_owner_amount_uses_owner_expenses_not_deductions():
+    """net_owner_amount = paid - owner_expenses; deductions do not affect it."""
     data = ManagedPropertyCreate(property=_make_property(), rental=_make_rental())
     pid = db.insert_managed_property(data)
     cid = _get_contract_id(pid)
@@ -891,11 +894,14 @@ def test_net_owner_amount_negative_when_deductions_exceed_paid():
         paid_amount=500000,
         status="paid",
         deductions=[{"label": "Gran descuento", "amount": 600000}],
+        owner_expenses=[{"label": "GG.CC.", "amount": 150000}],
     )
 
     result = db.get_payment(payment_id)
-    assert result["net_owner_amount"] == 500000 - 600000  # -100000
-    assert result["net_owner_amount"] < 0
+    # net_owner_amount = paid - owner_expenses = 500000 - 150000
+    assert result["net_owner_amount"] == 500000 - 150000
+    # deductions do NOT affect net_owner_amount
+    assert result["net_owner_amount"] != 500000 - 600000
 
 
 def test_list_payments_includes_deductions_no_n_plus_one():
@@ -922,7 +928,8 @@ def test_list_payments_includes_deductions_no_n_plus_one():
     assert len(p1["deductions"]) == 1
     assert p1["deductions"][0]["label"] == "Comisión A"
     assert len(p2["deductions"]) == 2
-    assert p2["net_owner_amount"] == 500000 - 20000 - 5000
+    # net_owner_amount = paid - owner_expenses (no owner_expenses → equals paid)
+    assert p2["net_owner_amount"] == 500000
 
 
 def _get_any_contract_id() -> int:

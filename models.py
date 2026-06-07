@@ -167,6 +167,9 @@ class ContractListItem(BaseModel):
     contract_document_mime_type: str | None = None
     contract_document_size_bytes: int | None = None
     contract_document_uploaded_at: str | None = None
+    broker_fee_enabled: bool = False
+    usual_broker_fee: int | None = None
+    owner_pays_ggcc: bool = False
 
 
 class ContractCreate(BaseModel):
@@ -190,6 +193,9 @@ class ContractUpdate(BaseModel):
     current_rent: int | None = Field(default=None, gt=0)
     comment: str | None = None
     contract_document_url: str | None = None
+    broker_fee_enabled: bool | None = None
+    usual_broker_fee: int | None = None
+    owner_pays_ggcc: bool | None = None
 
 
 class ContractCloseRequest(BaseModel):
@@ -217,6 +223,9 @@ class ContractDetailResponse(BaseModel):
     contract_document_mime_type: str | None = None
     contract_document_size_bytes: int | None = None
     contract_document_uploaded_at: str | None = None
+    broker_fee_enabled: bool = False
+    usual_broker_fee: int | None = None
+    owner_pays_ggcc: bool = False
 
 
 class TenantListItem(BaseModel):
@@ -265,12 +274,34 @@ class PaymentDeductionResponse(BaseModel):
     sort_order: int
 
 
+class OwnerExpenseInput(BaseModel):
+    label: str
+    amount: int = Field(gt=0)
+    note: str | None = None
+
+    @field_validator("label")
+    @classmethod
+    def label_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("label must not be blank")
+        return value
+
+
+class OwnerExpenseResponse(BaseModel):
+    id: int
+    label: str
+    amount: int
+    note: str | None = None
+    sort_order: int
+
+
 class PaymentCreate(BaseModel):
     period: str
     paid_amount: int | None = Field(default=None, ge=0)
     paid_at: date | None = None
     comment: str | None = None
     deductions: list[PaymentDeductionInput] = Field(default_factory=list)
+    owner_expenses: list[OwnerExpenseInput] = Field(default_factory=list)
 
     @field_validator("period")
     @classmethod
@@ -285,6 +316,7 @@ class PaymentUpdate(BaseModel):
     paid_at: date | None = None
     comment: str | None = None
     deductions: list[PaymentDeductionInput] | None = None
+    owner_expenses: list[OwnerExpenseInput] | None = None
 
 
 class PaymentResponse(BaseModel):
@@ -300,6 +332,7 @@ class PaymentResponse(BaseModel):
     comment: str | None = None
     created_at: date
     deductions: list[PaymentDeductionResponse] = Field(default_factory=list)
+    owner_expenses: list[OwnerExpenseResponse] = Field(default_factory=list)
     recognized_amount: int = 0
     overpayment: int = 0
     net_owner_amount: int = 0

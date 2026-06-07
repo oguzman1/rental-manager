@@ -66,6 +66,8 @@ from models import (
     NoticeRevertResponse,
     NoticeSentRequest,
     NoticeSentResponse,
+    OwnerExpenseInput,
+    OwnerExpenseResponse,
     PaymentCreate,
     PaymentResponse,
     PaymentUpdate,
@@ -915,14 +917,16 @@ def create_payment(contract_id: int, data: PaymentCreate):
     paid_at = str(data.paid_at) if data.paid_at is not None else None
 
     paid = paid_amount or 0
-    if paid == 0:
+    deductions = [d.model_dump() for d in data.deductions]
+    owner_expenses = [e.model_dump() for e in data.owner_expenses]
+    total_deductions = sum(d["amount"] for d in deductions)
+    recognized = paid + total_deductions
+    if recognized == 0:
         status = "pending"
-    elif paid >= expected_amount:
+    elif recognized >= expected_amount:
         status = "paid"
     else:
         status = "partial"
-
-    deductions = [d.model_dump() for d in data.deductions]
 
     try:
         payment_id = insert_payment(
@@ -935,6 +939,7 @@ def create_payment(contract_id: int, data: PaymentCreate):
             paid_at=paid_at,
             status=status,
             deductions=deductions,
+            owner_expenses=owner_expenses,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -987,16 +992,29 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
         if "deductions" in data.model_fields_set
         else None
     )
+    # owner_expenses absent → None (no change); [] → clear; [...] → replace
+    owner_expenses = (
+        [e.model_dump() for e in data.owner_expenses]
+        if "owner_expenses" in data.model_fields_set
+        else None
+    )
 
+    # Use updated deductions list (or existing ones from DB) for recognized_amount status calc
+    if deductions is not None:
+        effective_deductions = deductions
+    else:
+        effective_deductions = payment.get("deductions", [])
     paid = paid_amount or 0
-    if paid == 0:
+    total_deductions = sum(d["amount"] for d in effective_deductions)
+    recognized = paid + total_deductions
+    if recognized == 0:
         status = "pending"
-    elif paid >= payment["expected_amount"]:
+    elif recognized >= payment["expected_amount"]:
         status = "paid"
     else:
         status = "partial"
 
-    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions)
+    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses)
     return get_payment(payment_id)
 
 

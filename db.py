@@ -1950,7 +1950,72 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
     return updated_current, updated_next
 
 
+def _ensure_payment_periods(contract_id: int) -> int:
+    """Fill gaps in the payment schedule without extending it.
+
+    Inserts a pending row for any month that is missing within the range
+    [min_existing_period, max_existing_period]. Existing rows are never
+    modified (INSERT OR IGNORE). Does not extend the schedule beyond the
+    current last period. Returns count of rows inserted.
+    """
+    with get_connection() as conn:
+        bounds = conn.execute(
+            "SELECT MIN(period), MAX(period) FROM payments WHERE contract_id = ?",
+            (contract_id,),
+        ).fetchone()
+        if bounds is None or bounds[0] is None:
+            return 0
+        min_ym, max_ym = bounds
+
+        row = conn.execute(
+            """
+            SELECT c.payment_day,
+                   (SELECT amount FROM rent_changes
+                    WHERE contract_id = c.id
+                    ORDER BY effective_from DESC, id DESC LIMIT 1) AS current_rent
+            FROM contracts c WHERE c.id = ? AND c.is_active = 1
+            """,
+            (contract_id,),
+        ).fetchone()
+        if row is None:
+            return 0
+        payment_day, current_rent = row
+        if not current_rent:
+            return 0
+
+        existing = {
+            r[0]
+            for r in conn.execute(
+                "SELECT period FROM payments WHERE contract_id = ?",
+                (contract_id,),
+            ).fetchall()
+        }
+
+        inserted = 0
+        for period in _iter_months(min_ym, max_ym):
+            if period in existing:
+                continue
+            y, m = int(period[:4]), int(period[5:7])
+            last_day = monthrange(y, m)[1]
+            due_date_str = f"{y}-{m:02d}-{min(payment_day, last_day):02d}"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO payments
+                    (contract_id, period, due_date, expected_amount, status, source)
+                VALUES (?, ?, ?, ?, 'pending', 'manual')
+                """,
+                (contract_id, period, due_date_str, current_rent),
+            )
+            inserted += 1
+
+        if inserted:
+            conn.commit()
+
+    return inserted
+
+
 def list_payments_for_contract(contract_id: int) -> list[dict]:
+    _ensure_payment_periods(contract_id)
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM payments WHERE contract_id = ? ORDER BY period DESC",

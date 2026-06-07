@@ -331,6 +331,7 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
+  min-width: max-content;
 }
 
 .dashboard-table {

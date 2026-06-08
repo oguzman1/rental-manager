@@ -4294,3 +4294,121 @@ def test_ensure_payment_periods_no_duplicate_rows():
     result = client.get(f"/contracts/{cid}/payments").json()
     periods = [p["period"] for p in result]
     assert len(periods) == len(set(periods)), "No duplicate period rows"
+
+
+# ---------------------------------------------------------------------------
+# Dashboard multi-alert: current-month unpaid + older partial
+# ---------------------------------------------------------------------------
+
+_MULTI_ALERT_ROL = "99999-00099"
+
+
+def _get_contract_id_for_multi_alert_rol() -> int:
+    conn = _sqlite3.connect("test_rental_manager.db")
+    row = conn.execute(
+        """
+        SELECT c.id FROM contracts c
+        JOIN properties p ON p.id = c.property_id
+        WHERE p.rol = ? AND c.is_active = 1
+        """,
+        (_MULTI_ALERT_ROL,),
+    ).fetchone()
+    conn.close()
+    assert row is not None, f"Contract for ROL {_MULTI_ALERT_ROL} not found"
+    return row[0]
+
+
+def test_dashboard_multi_alert_setup():
+    """Create a property whose contract starts in the current period."""
+    today = datetime.date.today()
+    start = today.replace(day=1)
+    prev_m = today.month - 1 or 12
+    prev_y = today.year if today.month > 1 else today.year - 1
+    start = datetime.date(prev_y, prev_m, 1)
+
+    payload = {
+        "property": {
+            "comuna": "TEST MULTI ALERT",
+            "rol": _MULTI_ALERT_ROL,
+            "address": "TEST STREET 99",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "9999",
+            "property_number": "9999",
+            "year": 2024,
+            "fiscal_appraisal": 10000000,
+        },
+        "rental": {
+            "tenant_name": "Multi Alert Tenant",
+            "payment_day": 5,
+            "property_label": "depto multi alert",
+            "current_rent": 500000,
+            "adjustment_frequency": "annual",
+            "start_date": start.isoformat(),
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    }
+    r = client.post("/managed-property", json=payload)
+    assert r.status_code == 200
+
+
+def test_dashboard_multi_alert_current_period_fields_present():
+    """Dashboard must return current_payment_period and related amount fields."""
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+
+    dashboard = client.get("/dashboard").json()
+    item = next((p for p in dashboard if p.get("rol") == _MULTI_ALERT_ROL), None)
+    assert item is not None, "Multi-alert property not found in dashboard"
+
+    assert "current_payment_period" in item
+    assert item["current_payment_period"] == current_period
+
+
+def test_dashboard_multi_alert_partial_prev_and_pending_current():
+    """
+    Given: previous month is partial, current month is pending.
+    Expected: actionable_payment_period = previous month,
+              current_payment_status = 'pending',
+              current_payment_period = current month.
+    """
+    today = datetime.date.today()
+    current_period = today.strftime("%Y-%m")
+    prev_m = today.month - 1 or 12
+    prev_y = today.year if today.month > 1 else today.year - 1
+    prev_period = f"{prev_y}-{prev_m:02d}"
+
+    cid = _get_contract_id_for_multi_alert_rol()
+
+    # Ensure payments exist for both months
+    client.get(f"/contracts/{cid}/payments")
+
+    # Patch previous month to partial
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    prev_row = next((p for p in payments if p["period"] == prev_period), None)
+    assert prev_row is not None, f"Previous period {prev_period} not found"
+    partial_amount = prev_row["expected_amount"] - 1000
+    r = client.patch(
+        f"/payments/{prev_row['id']}",
+        json={"paid_amount": partial_amount, "paid_at": f"{prev_y}-{prev_m:02d}-10"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "partial"
+
+    # Current month row should exist and be pending
+    current_row = next((p for p in payments if p["period"] == current_period), None)
+    assert current_row is not None, f"Current period {current_period} not found"
+    assert current_row["status"] == "pending"
+
+    # Check dashboard
+    dashboard = client.get("/dashboard").json()
+    item = next((p for p in dashboard if p.get("rol") == _MULTI_ALERT_ROL), None)
+    assert item is not None
+
+    assert item["actionable_payment_period"] == prev_period, \
+        "actionable_payment_period should be the oldest unpaid (partial prev month)"
+    assert item["actionable_payment_status"] == "partial"
+    assert item["current_payment_period"] == current_period
+    assert item["current_payment_status"] == "pending"
+    assert item["current_payment_amount"] == current_row["expected_amount"]

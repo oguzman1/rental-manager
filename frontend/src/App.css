@@ -330,7 +330,7 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: clip;
   min-width: max-content;
 }
 
@@ -865,6 +865,21 @@
 
 .table-row-static {
   border-bottom: 1px solid var(--line);
+}
+
+/* Sticky Acciones column in payments table */
+.th-actions {
+  position: sticky;
+  right: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
+
+.td-actions {
+  position: sticky;
+  right: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
 }
 
 .current-period-card {

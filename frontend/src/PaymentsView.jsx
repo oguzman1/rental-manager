@@ -1207,7 +1207,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                     <th className="th">Fecha pago</th>
                     <th className="th">Estado</th>
                     <th className="th">Nota</th>
-                    <th className="th">Acciones</th>
+                    <th className="th th-actions">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1244,7 +1244,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                           <td className="td td-muted">
                             {p.comment ?? <span className="text-muted">—</span>}
                           </td>
-                          <td className="td">
+                          <td className="td td-actions">
                             <button className="btn-payments" onClick={() => openEdit(p)}>
                               Editar
                             </button>

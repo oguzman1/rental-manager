@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import Topbar from './Topbar'
 import { NoticeBadge } from './Badge'
-import { formatCLP, daysUntil, formatMonthsAgo, formatMonthsUntil } from './utils'
+import { formatCLP, daysUntil, formatMonthsAgo, formatNextAdjustment } from './utils'
 
 const BASE_URL = 'http://127.0.0.1:8000'
 const API_URL = `${BASE_URL}/rent-adjustments`
@@ -10,6 +10,18 @@ const EVENT_LABEL = {
   sent: 'Aviso enviado',
   reverted: 'Aviso anulado',
   dismissed: 'Alerta anulada / no corresponde',
+}
+
+function formatNextAdjustmentSubtext(isoDate) {
+  if (!isoDate) return null
+  const label = formatNextAdjustment(isoDate)
+  return label ? label.charAt(0).toLowerCase() + label.slice(1) : null
+}
+
+function formatLastAdjustmentSubtext(monthsSinceLast) {
+  if (monthsSinceLast === null || monthsSinceLast === undefined) return null
+  if (monthsSinceLast < 0) return 'programado'
+  return formatMonthsAgo(monthsSinceLast)
 }
 
 function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateChanged }) {
@@ -159,7 +171,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
         {!isLoading && !error && (
           <div className="table-scroll">
             <div className="table-wrapper">
-              <table className="dashboard-table">
+              <table className="dashboard-table adjustments-table">
                 <thead>
                   <tr>
                     <th className="th">Rol</th>
@@ -189,15 +201,17 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                         <td className="td td-right td-mono">{formatCLP(item.current_rent)}</td>
                         <td className="td td-mono td-muted">
                           <div>{item.next_adjustment_date}</div>
-                          <div className="td-sub">
-                            {formatMonthsUntil(item.months_until_next_adjustment)}
-                          </div>
+                          {formatNextAdjustmentSubtext(item.next_adjustment_date) && (
+                            <div className="td-sub">
+                              {formatNextAdjustmentSubtext(item.next_adjustment_date)}
+                            </div>
+                          )}
                         </td>
                         <td className="td td-mono td-muted">
                           <div>{item.last_adjustment_date ?? '—'}</div>
                           {item.last_adjustment_date && (
                             <div className="td-sub">
-                              {formatMonthsAgo(item.months_since_last_adjustment)}
+                              {formatLastAdjustmentSubtext(item.months_since_last_adjustment)}
                             </div>
                           )}
                         </td>
@@ -273,20 +287,10 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                               Anular alerta
                             </button>
                           )}
-                          {item.contract_id && (
+                          {(item.requires_adjustment_notice || item.notice_registered) && item.contract_id && (
                             <button
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                fontSize: '0.75rem',
-                                color: 'inherit',
-                                opacity: 0.6,
-                                marginTop: '6px',
-                                display: 'block',
-                                textDecoration: 'underline',
-                                padding: 0,
-                              }}
+                              className="btn-payments"
+                              style={{ marginTop: '6px' }}
                               onClick={() => handleToggleHistory(item)}
                             >
                               {historyContractId === item.contract_id

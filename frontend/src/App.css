@@ -882,6 +882,39 @@
   border-left: 1px solid var(--line);
 }
 
+.adjustments-table {
+  min-width: 1120px;
+}
+
+.adjustments-table th:nth-child(5),
+.adjustments-table td:nth-child(5),
+.adjustments-table th:nth-child(6),
+.adjustments-table td:nth-child(6) {
+  min-width: 130px;
+}
+
+.adjustments-table th:nth-child(7),
+.adjustments-table td:nth-child(7) {
+  min-width: 180px;
+}
+
+.adjustments-table .th-actions {
+  right: auto;
+  min-width: 190px;
+}
+
+.adjustments-table .td-actions {
+  position: static;
+  right: auto;
+  min-width: 190px;
+  white-space: normal;
+}
+
+.adjustments-table .td-actions .btn-payments {
+  margin-right: 6px;
+  margin-bottom: 6px;
+}
+
 .current-period-card {
   padding: 14px 20px;
   border-bottom: 1px solid var(--line);

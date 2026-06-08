@@ -98,6 +98,9 @@ class RentAdjustmentItem(BaseModel):
     notice_registered: bool = False
     adjustment_due: bool = False
     due_adjustment_date: date | None = None
+    adjustment_resolved: bool = False
+    adjustment_dismissed: bool = False
+    adjustment_alert_state: str = "upcoming"
 
 
 class RentChangeItem(BaseModel):
@@ -149,6 +152,9 @@ class DashboardItem(BaseModel):
     notice_sent_at: date | None = None
     notice_registered: bool = False
     adjustment_due: bool = False
+    adjustment_resolved: bool = False
+    adjustment_dismissed: bool = False
+    adjustment_alert_state: str = "upcoming"
 
 
 class ContractListItem(BaseModel):
@@ -370,6 +376,10 @@ class NoticeSentRequest(BaseModel):
 
 
 class NoticeRevertResponse(BaseModel):
+    contract_id: int
+
+
+class AdjustmentDismissResponse(BaseModel):
     contract_id: int
 
 

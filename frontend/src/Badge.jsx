@@ -75,13 +75,48 @@ export function PaymentStateBadge({ state }) {
   )
 }
 
-export function NoticeBadge({ daysUntilNotice, noticeRegistered, adjustmentDue, noticeSentAt }) {
-  if (noticeRegistered && !adjustmentDue) {
+export function NoticeBadge({
+  daysUntilNotice,
+  noticeRegistered,
+  adjustmentDue,
+  noticeSentAt,
+  adjustmentResolved,
+  adjustmentDismissed,
+  adjustmentAlertState,
+}) {
+  if (adjustmentResolved || adjustmentAlertState === 'resolved') {
+    return (
+      <span className="badge badge-ok">
+        <span className="badge-dot" />
+        Resuelto
+      </span>
+    )
+  }
+
+  if (adjustmentDismissed || adjustmentAlertState === 'dismissed') {
+    return (
+      <span className="badge badge-muted">
+        <span className="badge-dot" />
+        Anulado / no corresponde
+      </span>
+    )
+  }
+
+  if (adjustmentAlertState === 'upcoming') {
+    return (
+      <span className="badge badge-muted">
+        <span className="badge-dot" />
+        Próximo ciclo
+      </span>
+    )
+  }
+
+  if (noticeRegistered || adjustmentAlertState === 'notice_sent') {
     return (
       <div>
-        <span className="badge badge-ok">
+        <span className="badge badge-warn">
           <span className="badge-dot" />
-          Aviso registrado
+          Aviso enviado
         </span>
         {noticeSentAt && <div className="td-sub">Avisado el {noticeSentAt}</div>}
       </div>

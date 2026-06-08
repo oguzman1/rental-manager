@@ -9,6 +9,7 @@ const API_URL = `${BASE_URL}/rent-adjustments`
 const EVENT_LABEL = {
   sent: 'Aviso enviado',
   reverted: 'Aviso anulado',
+  dismissed: 'Alerta anulada / no corresponde',
 }
 
 function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateChanged }) {
@@ -17,6 +18,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
   const [error, setError] = useState(null)
   const [sendingId, setSendingId] = useState(null)
   const [revertingId, setRevertingId] = useState(null)
+  const [dismissingId, setDismissingId] = useState(null)
   const [formItemId, setFormItemId] = useState(null)
   const [formComment, setFormComment] = useState('')
   const [historyContractId, setHistoryContractId] = useState(null)
@@ -97,6 +99,30 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
       // silent
     } finally {
       setRevertingId(null)
+    }
+  }
+
+  async function handleDismissAlert(item) {
+    if (!item.contract_id) return
+    if (!window.confirm('¿Anular esta alerta de reajuste? No se modificará el calendario ni el historial de reajustes.')) return
+    const comment = window.prompt('Motivo opcional')
+    setDismissingId(item.id)
+    try {
+      const body = comment?.trim() ? { comment: comment.trim() } : {}
+      const res = await fetch(`${BASE_URL}/contracts/${item.contract_id}/adjustment-alert-dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (res.ok) {
+        clearHistoryCache(item.contract_id)
+        await reloadItems()
+        onNoticeStateChanged?.()
+      }
+    } catch {
+      // silent
+    } finally {
+      setDismissingId(null)
     }
   }
 
@@ -181,21 +207,32 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                             noticeRegistered={item.notice_registered}
                             adjustmentDue={item.adjustment_due}
                             noticeSentAt={item.notice_sent_at}
+                            adjustmentResolved={item.adjustment_resolved}
+                            adjustmentDismissed={item.adjustment_dismissed}
+                            adjustmentAlertState={item.adjustment_alert_state}
                           />
                         </td>
                         <td className="td td-actions" onClick={(e) => e.stopPropagation()}>
-                          {!item.notice_registered ? (
-                            formItemId === item.id ? (
-                              <button
-                                className="btn-payments"
-                                onClick={() => {
-                                  setFormItemId(null)
-                                  setFormComment('')
-                                }}
-                              >
-                                Cancelar
-                              </button>
-                            ) : (
+                          {!item.requires_adjustment_notice && !item.notice_registered ? (
+                            <button
+                              className="btn-payments"
+                              onClick={() => handleToggleHistory(item)}
+                            >
+                              Ver historial
+                            </button>
+                          ) : !item.notice_registered ? (
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                              {item.adjustment_due && (
+                                <button
+                                  className="btn-payments"
+                                  onClick={() => onRentChangeSelect?.({
+                                    ...item,
+                                    next_adjustment_date: item.due_adjustment_date ?? item.next_adjustment_date,
+                                  })}
+                                >
+                                  Aplicar reajuste
+                                </button>
+                              )}
                               <button
                                 className="btn-payments"
                                 onClick={() => {
@@ -203,16 +240,19 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                                   setFormComment('')
                                 }}
                               >
-                                Gestionar
+                                Registrar aviso
                               </button>
-                            )
+                            </div>
                           ) : (
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                               <button
                                 className="btn-payments"
-                                onClick={() => onRentChangeSelect?.(item)}
+                                onClick={() => onRentChangeSelect?.({
+                                  ...item,
+                                  next_adjustment_date: item.due_adjustment_date ?? item.next_adjustment_date,
+                                })}
                               >
-                                Reajuste
+                                Aplicar reajuste
                               </button>
                               <button
                                 className="btn-payments"
@@ -222,6 +262,16 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                                 Anular aviso
                               </button>
                             </div>
+                          )}
+                          {item.requires_adjustment_notice && !item.adjustment_resolved && !item.adjustment_dismissed && (
+                            <button
+                              className="btn-payments"
+                              disabled={dismissingId === item.id}
+                              style={{ marginTop: '6px' }}
+                              onClick={() => handleDismissAlert(item)}
+                            >
+                              Anular alerta
+                            </button>
                           )}
                           {item.contract_id && (
                             <button
@@ -365,7 +415,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                 </tbody>
               </table>
               <div className="table-footer">
-                <span>{items.length} contratos con reajuste activo</span>
+                <span>{items.length} contratos con ciclo de reajuste</span>
               </div>
             </div>
           </div>

@@ -219,6 +219,17 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     setFormAmount(formatAmountInput(isVirtual ? contract.current_rent : getPrefillAmount(payment)))
     setFormDate(todayLocal())
     setFormNote('')
+    if (!isVirtual && payment) {
+      setFormDeductions(
+        (payment.deductions ?? []).map(d => ({
+          label: d.label,
+          amount: d.amount ? formatAmountInput(String(d.amount)) : '',
+          note: d.note ?? '',
+        }))
+      )
+      const existingGgcc = (payment.owner_expenses ?? []).find(e => isGgccExpense(e))
+      setFormGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
+    }
     setFormError(null)
     setActiveForm('add')
   }
@@ -235,6 +246,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     if (p) {
       setFormAmount(formatAmountInput(getPrefillAmount(p)))
       setFormDate(p.paid_at ?? todayLocal())
+      setFormDeductions(
+        (p.deductions ?? []).map(d => ({
+          label: d.label,
+          amount: d.amount ? formatAmountInput(String(d.amount)) : '',
+          note: d.note ?? '',
+        }))
+      )
+      const existingGgcc = (p.owner_expenses ?? []).find(e => isGgccExpense(e))
+      setFormGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
     } else {
       // Virtual period not yet created — default to expected monthly rent
       setFormAmount(formatAmountInput(contract.current_rent))
@@ -275,18 +295,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     const amount = parseAmountInput(formAmount)
     const existing = payments.find(p => p.period === period)
 
-    // Validate deductions for new rows before the overpayment check so partial
-    // rows are caught immediately, never reach the draft, and never get submitted.
-    let normalizedDeds = []
-    if (!existing) {
-      const dedResult = normalizeDeductions(formDeductions)
-      if (!dedResult.ok) {
-        setFormError(dedResult.error)
-        setIsSubmitting(false)
-        return
-      }
-      normalizedDeds = dedResult.deductions
+    // Validate deductions before the overpayment check so partial rows are caught
+    // immediately, never reach the draft, and never get submitted.
+    const dedResult = normalizeDeductions(formDeductions)
+    if (!dedResult.ok) {
+      setFormError(dedResult.error)
+      setIsSubmitting(false)
+      return
     }
+    const normalizedDeds = dedResult.deductions
 
     const expectedAmount = existing ? existing.expected_amount : (contract.current_rent ?? 0)
     const alreadyPaid = existing ? (existing.paid_amount ?? 0) : 0
@@ -323,6 +340,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
             paid_amount: (existing.paid_amount ?? 0) + amount,
             paid_at: formDate,
             ...(formNote ? { comment: formNote } : {}),
+            deductions: normalizedDeds,
+            owner_expenses: mergeGgccOwnerExpense(existing.owner_expenses, formGgcc),
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -527,9 +546,10 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const addFormTargetPeriod = formUseCustom ? formCustomPeriod : formPeriod
   const addFormIsNewRow = !payments.some(p => p.period === addFormTargetPeriod)
 
-  const addTotalDeductions = addFormIsNewRow
-    ? formDeductions.reduce((s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0)
-    : 0
+  const addFormExistingPayment = payments.find(p => p.period === addFormTargetPeriod) ?? null
+  const addTotalDeductions = formDeductions.reduce(
+    (s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0
+  )
   const editTotalDeductions = editDeductions.reduce(
     (s, d) => s + (d.amount !== '' ? parseAmountInput(d.amount) : 0), 0
   )
@@ -539,14 +559,16 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   const usualBrokerFee = contract.usual_broker_fee ?? 0
 
   const addPaidAmt = formAmount !== '' ? parseAmountInput(formAmount) : 0
-  const addExpected = contract.current_rent ?? 0
+  const addExpected = addFormExistingPayment?.expected_amount ?? contract.current_rent ?? 0
+  const addExistingPaid = addFormExistingPayment ? (addFormExistingPayment.paid_amount ?? 0) : 0
+  const addCumulativePaid = addExistingPaid + addPaidAmt
   const addBrokerDedAmt = (() => {
     const b = formDeductions.find(d => d.label === 'Corredora')
     return b && b.amount !== '' ? parseAmountInput(b.amount) : 0
   })()
   const addNonBrokerDeds = addTotalDeductions - addBrokerDedAmt
-  const addBrokerDiff = addExpected - addPaidAmt - addNonBrokerDeds
-  const addRecognized = addPaidAmt + addTotalDeductions
+  const addBrokerDiff = addExpected - addCumulativePaid - addNonBrokerDeds
+  const addRecognized = addCumulativePaid + addTotalDeductions
   const addMissing = Math.max(0, addExpected - addRecognized)
 
   const editPaidAmt = editAmount !== '' ? parseAmountInput(editAmount) : 0
@@ -566,9 +588,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     return (expenses ?? []).reduce((s, e) => s + (e.amount ?? 0), 0)
   }
 
-  const addMergedOwnerExpenses = mergeGgccOwnerExpense([], formGgcc)
+  const addMergedOwnerExpenses = mergeGgccOwnerExpense(addFormExistingPayment?.owner_expenses, formGgcc)
   const addOwnerExpenseTotal = sumOwnerExpenses(addMergedOwnerExpenses)
-  const addNetOwner = addPaidAmt - addOwnerExpenseTotal
+  const addNetOwner = addCumulativePaid - addOwnerExpenseTotal
 
   const editMergedOwnerExpenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
   const editOwnerExpenseTotal = sumOwnerExpenses(editMergedOwnerExpenses)
@@ -852,7 +874,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   disabled={!!pendingOverpaymentDraft}
                 />
               </label>
-              {addFormIsNewRow && (
+              {(addFormIsNewRow || brokerEnabled || ggccEnabled) && (
                 <div className="deductions-section">
                   <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
                   {formDeductions.map((row, i) => (
@@ -940,7 +962,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
                   </span>
                 </div>
               )}
-              {ggccEnabled && !pendingOverpaymentDraft && addFormIsNewRow && (
+              {ggccEnabled && !pendingOverpaymentDraft && (
                 <div className="ggcc-section">
                   <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
                   <input

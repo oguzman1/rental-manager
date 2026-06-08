@@ -91,8 +91,19 @@ function App() {
     setRoute({ name: target })
   }
 
-  function handleRowClick(property) {
-    setRoute({ name: 'property', property, from: route.name })
+  async function handleRowClick(property) {
+    if (!property.contract_id) {
+      setRoute({ name: 'property', property, from: route.name })
+      return
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/contracts/${property.contract_id}`)
+      if (!res.ok) throw new Error()
+      const contract = await res.json()
+      setRoute({ name: 'payments', contract, from: 'dashboard' })
+    } catch {
+      setRoute({ name: 'property', property, from: route.name })
+    }
   }
 
   function handlePropertySelect(propertyId) {
@@ -106,19 +117,27 @@ function App() {
     setRoute({ name: 'payments', contract, from: route.name })
   }
 
-  function handleNoticePaymentClick(property) {
-    setRoute({
-      name: 'payments',
-      contract: {
-        id:             property.contract_id,
-        property_label: property.property_label,
-        tenant_name:    property.tenant_name,
-        current_rent:   property.current_rent,
-        payment_day:    property.payment_day,
-      },
-      targetPeriod: property.actionable_payment_period ?? null,
-      from: 'dashboard',
-    })
+  async function handleNoticePaymentClick(property) {
+    const targetPeriod = property.actionable_payment_period ?? null
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/contracts/${property.contract_id}`)
+      if (!res.ok) throw new Error()
+      const contract = await res.json()
+      setRoute({ name: 'payments', contract, targetPeriod, from: 'dashboard' })
+    } catch {
+      setRoute({
+        name: 'payments',
+        contract: {
+          id:             property.contract_id,
+          property_label: property.property_label,
+          tenant_name:    property.tenant_name,
+          current_rent:   property.current_rent,
+          payment_day:    property.payment_day,
+        },
+        targetPeriod,
+        from: 'dashboard',
+      })
+    }
   }
 
   function handleNoticeAdjustmentClick(property) {

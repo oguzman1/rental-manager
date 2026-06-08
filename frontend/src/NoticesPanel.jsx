@@ -18,7 +18,23 @@ const PAYMENT_CARD_CLASS = {
   pending: 'notice-card-next_30_days',
 }
 
-function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAdjustmentSelect, onMarkNoticeSent }) {
+const ADJUSTMENT_STATE_LABEL = {
+  pending_adjustment: 'Pendiente de reajuste',
+  pending_notice: 'Pendiente de aviso',
+  notice_sent: 'Aviso enviado / pendiente de aplicar',
+  resolved: 'Resuelto',
+  dismissed: 'Anulado / no corresponde',
+  upcoming: 'Próximo ciclo',
+}
+
+function NoticesPanel({
+  paymentNotices,
+  adjustmentNotices,
+  onPaymentSelect,
+  onAdjustmentSelect,
+  onMarkNoticeSent,
+  onDismissAdjustmentAlert,
+}) {
   const [resolveModal, setResolveModal] = useState(null)
 
   const hasPayments    = paymentNotices.length > 0
@@ -70,7 +86,7 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
           <div className="payment-modal-panel" onClick={(e) => e.stopPropagation()}>
             <div className="payment-modal-header">
               <span className="payment-modal-title">
-                Reajuste — {resolveModal.property_label ?? resolveModal.rol}
+                Resolver reajuste — {resolveModal.property_label ?? resolveModal.rol}
               </span>
               <button className="payment-modal-close" onClick={() => setResolveModal(null)}>×</button>
             </div>
@@ -80,22 +96,32 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
                   <div><span style={{ opacity: 0.6 }}>Arrendatario:</span> {resolveModal.tenant_name}</div>
                 )}
                 <div><span style={{ opacity: 0.6 }}>Renta actual:</span> {formatCLP(resolveModal.current_rent)}</div>
+                {resolveModal.next_adjustment_date && (
+                  <div><span style={{ opacity: 0.6 }}>Próximo reajuste:</span> {resolveModal.next_adjustment_date}</div>
+                )}
+                {resolveModal.last_adjustment_date && (
+                  <div><span style={{ opacity: 0.6 }}>Último reajuste:</span> {resolveModal.last_adjustment_date}</div>
+                )}
                 {resolveModal.due_adjustment_date && (
                   <div>
-                    <span style={{ opacity: 0.6 }}>Vencimiento:</span>{' '}
+                    <span style={{ opacity: 0.6 }}>Ciclo pendiente:</span>{' '}
                     {resolveModal.due_adjustment_date}
                     {formatAdjustmentTiming(resolveModal.due_adjustment_date) && (
                       <span style={{ opacity: 0.6 }}> · {formatAdjustmentTiming(resolveModal.due_adjustment_date)}</span>
                     )}
                   </div>
                 )}
+                <div>
+                  <span style={{ opacity: 0.6 }}>Estado:</span>{' '}
+                  {ADJUSTMENT_STATE_LABEL[resolveModal.adjustment_alert_state] ?? 'Pendiente de reajuste'}
+                </div>
               </div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
                 <button
                   className="btn-payments"
                   onClick={() => { setResolveModal(null); onAdjustmentSelect(resolveModal) }}
                 >
-                  Gestionar reajuste
+                  Aplicar reajuste
                 </button>
                 {!resolveModal.notice_registered && (
                   <button
@@ -105,6 +131,17 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
                     Registrar aviso enviado
                   </button>
                 )}
+                <button
+                  className="btn-payments"
+                  onClick={() => {
+                    if (!window.confirm('¿Anular esta alerta de reajuste? No se modificará el calendario ni el historial de reajustes.')) return
+                    const comment = window.prompt('Motivo opcional')
+                    setResolveModal(null)
+                    onDismissAdjustmentAlert?.(resolveModal, comment ?? '')
+                  }}
+                >
+                  Anular alerta
+                </button>
               </div>
             </div>
           </div>
@@ -160,6 +197,7 @@ function AdjustmentCard({ item, onResolve }) {
   const title   = `Reajuste ${formatPeriodLabel((dateRef ?? '').slice(0, 7))}`
   const timing  = formatAdjustmentTiming(dateRef)
   const meta    = `${item.property_label ?? item.rol}: ${formatCLP(item.current_rent)}`
+  const state   = ADJUSTMENT_STATE_LABEL[item.adjustment_alert_state] ?? 'Pendiente de reajuste'
 
   return (
     <div
@@ -173,7 +211,7 @@ function AdjustmentCard({ item, onResolve }) {
         <span className="notice-card-name">{title}</span>
       </div>
       {timing && <div className="notice-card-date">{timing}</div>}
-      <div className="notice-card-tenant">{meta}</div>
+      <div className="notice-card-tenant">{state} · {meta}</div>
       <button
         className="btn-payments notice-card-btn"
         onClick={(e) => { e.stopPropagation(); onResolve() }}

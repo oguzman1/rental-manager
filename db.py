@@ -162,13 +162,43 @@ def init_db():
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
                 contract_id         INTEGER NOT NULL REFERENCES contracts(id),
                 due_adjustment_date TEXT    NOT NULL,
-                event_type          TEXT    NOT NULL CHECK(event_type IN ('sent', 'reverted')),
+                event_type          TEXT    NOT NULL CHECK(event_type IN ('sent', 'reverted', 'dismissed')),
                 event_at            TEXT    NOT NULL,
                 comment             TEXT,
                 created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
             )
             """
         )
+        notice_events_sql = conn.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'adjustment_notice_events'
+            """
+        ).fetchone()[0]
+        if "'dismissed'" not in notice_events_sql:
+            conn.execute("ALTER TABLE adjustment_notice_events RENAME TO adjustment_notice_events_old")
+            conn.execute(
+                """
+                CREATE TABLE adjustment_notice_events (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id         INTEGER NOT NULL REFERENCES contracts(id),
+                    due_adjustment_date TEXT    NOT NULL,
+                    event_type          TEXT    NOT NULL CHECK(event_type IN ('sent', 'reverted', 'dismissed')),
+                    event_at            TEXT    NOT NULL,
+                    comment             TEXT,
+                    created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO adjustment_notice_events
+                    (id, contract_id, due_adjustment_date, event_type, event_at, comment, created_at)
+                SELECT id, contract_id, due_adjustment_date, event_type, event_at, comment, created_at
+                FROM adjustment_notice_events_old
+                """
+            )
+            conn.execute("DROP TABLE adjustment_notice_events_old")
 
         conn.execute(
             """
@@ -1314,6 +1344,45 @@ def mark_notice_sent(
         )
         conn.commit()
     return True
+
+
+def dismiss_adjustment_alert(
+    contract_id: int,
+    dismissed_at: date,
+    comment: str | None,
+    due_adjustment_date: date,
+) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM contracts WHERE id = ? AND is_active = 1",
+            (contract_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            """
+            INSERT INTO adjustment_notice_events
+                (contract_id, due_adjustment_date, event_type, event_at, comment)
+            VALUES (?, ?, 'dismissed', ?, ?)
+            """,
+            (contract_id, due_adjustment_date.isoformat(), dismissed_at.isoformat(), comment),
+        )
+        conn.commit()
+    return True
+
+
+def is_adjustment_alert_dismissed(contract_id: int, due_adjustment_date: date) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT event_type FROM adjustment_notice_events
+            WHERE contract_id = ? AND due_adjustment_date = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (contract_id, due_adjustment_date.isoformat()),
+        ).fetchone()
+
+    return row is not None and row[0] == "dismissed"
 
 
 def revert_notice_sent(

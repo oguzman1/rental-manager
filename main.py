@@ -22,6 +22,7 @@ from db import (
     delete_payment,
     delete_rent_change,
     delete_tenant,
+    dismiss_adjustment_alert,
     get_contract,
     get_contract_for_payment,
     get_managed_property,
@@ -33,6 +34,7 @@ from db import (
     insert_payment,
     insert_rent_change,
     insert_tenant,
+    is_adjustment_alert_dismissed,
     list_contracts,
     list_dashboard_items,
     list_managed_properties,
@@ -52,6 +54,7 @@ from db import (
 )
 from models import (
     AdjustmentFrequency,
+    AdjustmentDismissResponse,
     ContractCloseRequest,
     ContractCreate,
     ContractDetailResponse,
@@ -109,6 +112,75 @@ _UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 _ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
+def _current_adjustment_state(
+    *,
+    contract_id: int,
+    start_date: date,
+    adjustment_frequency: AdjustmentFrequency,
+    notice_days: int | None,
+    last_adjustment_date: date | None,
+    notice_sent_at: date | None,
+    today: date,
+) -> dict:
+    next_adjustment_date = calculate_next_adjustment_date(
+        start_date=start_date,
+        adjustment_frequency=adjustment_frequency,
+        today=today,
+    )
+    adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date, notice_days)
+    due_adjustment_date = calculate_due_adjustment_date(
+        start_date=start_date,
+        adjustment_frequency=adjustment_frequency,
+        today=today,
+    )
+    current_cycle_notice_date = calculate_adjustment_notice_date(due_adjustment_date, notice_days)
+
+    adjustment_resolved = (
+        last_adjustment_date is not None
+        and last_adjustment_date >= current_cycle_notice_date
+    )
+    adjustment_due = today >= due_adjustment_date and not adjustment_resolved
+    notice_registered = (
+        notice_sent_at is not None
+        and notice_sent_at >= current_cycle_notice_date
+        and not adjustment_resolved
+    )
+    adjustment_dismissed = (
+        not adjustment_resolved
+        and is_adjustment_alert_dismissed(contract_id, due_adjustment_date)
+    )
+    requires_adjustment_notice = (
+        not adjustment_resolved
+        and not adjustment_dismissed
+        and (today >= adjustment_notice_date or adjustment_due)
+    )
+
+    if adjustment_resolved:
+        adjustment_alert_state = "resolved"
+    elif adjustment_dismissed:
+        adjustment_alert_state = "dismissed"
+    elif notice_registered:
+        adjustment_alert_state = "notice_sent"
+    elif adjustment_due:
+        adjustment_alert_state = "pending_adjustment"
+    elif requires_adjustment_notice:
+        adjustment_alert_state = "pending_notice"
+    else:
+        adjustment_alert_state = "upcoming"
+
+    return {
+        "next_adjustment_date": next_adjustment_date,
+        "adjustment_notice_date": adjustment_notice_date,
+        "due_adjustment_date": due_adjustment_date,
+        "adjustment_due": adjustment_due,
+        "notice_registered": notice_registered,
+        "requires_adjustment_notice": requires_adjustment_notice,
+        "adjustment_resolved": adjustment_resolved,
+        "adjustment_dismissed": adjustment_dismissed,
+        "adjustment_alert_state": adjustment_alert_state,
+    }
 
 
 @app.get("/health", tags=["system"])
@@ -189,6 +261,10 @@ def get_dashboard():
         requires_adjustment_notice = False
         notice_registered = False
         adjustment_due = False
+        due_adjustment_date = None
+        adjustment_resolved = False
+        adjustment_dismissed = False
+        adjustment_alert_state = "upcoming"
 
         last_adj_str = item["last_adjustment_date"]
         last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
@@ -203,42 +279,24 @@ def get_dashboard():
             start = date.fromisoformat(item["start_date"])
             freq = AdjustmentFrequency(item["adjustment_frequency"])
             notice_days = item.get("notice_days")
-
-            next_adjustment_date = calculate_next_adjustment_date(
+            adjustment_state = _current_adjustment_state(
+                contract_id=item["contract_id"],
                 start_date=start,
                 adjustment_frequency=freq,
+                notice_days=notice_days,
+                last_adjustment_date=last_adjustment_date,
+                notice_sent_at=notice_sent_at,
                 today=today,
             )
-            # adjustment_notice_date is for the next future cycle (used to display upcoming date)
-            adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date, notice_days)
-
-            # due_adjustment_date anchors the current cycle; can be in the past when overdue
-            due_adjustment_date = calculate_due_adjustment_date(
-                start_date=start,
-                adjustment_frequency=freq,
-                today=today,
-            )
-            adjustment_due = today >= due_adjustment_date
-
-            # Current cycle's notice window opens notice_days before due_adjustment_date.
-            # For upcoming adjustments this equals adjustment_notice_date.
-            # For overdue ones it is a past date that any recent rent_change can satisfy.
-            current_cycle_notice_date = calculate_adjustment_notice_date(due_adjustment_date, notice_days)
-
-            # Cycle is resolved once a rent_change is recorded on or after the window start
-            adjustment_done = (
-                last_adjustment_date is not None
-                and last_adjustment_date >= current_cycle_notice_date
-            )
-            # Show alert during the upcoming notice window OR when the adjustment is overdue
-            requires_adjustment_notice = not adjustment_done and (
-                today >= adjustment_notice_date or adjustment_due
-            )
-
-            notice_registered = (
-                notice_sent_at is not None
-                and notice_sent_at >= current_cycle_notice_date
-            )
+            next_adjustment_date = adjustment_state["next_adjustment_date"]
+            adjustment_notice_date = adjustment_state["adjustment_notice_date"]
+            due_adjustment_date = adjustment_state["due_adjustment_date"]
+            adjustment_due = adjustment_state["adjustment_due"]
+            notice_registered = adjustment_state["notice_registered"]
+            requires_adjustment_notice = adjustment_state["requires_adjustment_notice"]
+            adjustment_resolved = adjustment_state["adjustment_resolved"]
+            adjustment_dismissed = adjustment_state["adjustment_dismissed"]
+            adjustment_alert_state = adjustment_state["adjustment_alert_state"]
 
         results.append(
             {
@@ -270,10 +328,13 @@ def get_dashboard():
                 "actionable_payment_paid_amount": item.get("actionable_payment_paid_amount"),
                 "actionable_payment_recognized_amount": item.get("actionable_payment_recognized_amount"),
                 "contract_id": item.get("contract_id"),
-                "due_adjustment_date": due_adjustment_date if item["adjustment_frequency"] and item["start_date"] else None,
+                "due_adjustment_date": due_adjustment_date,
                 "notice_sent_at": notice_sent_at,
                 "notice_registered": notice_registered,
                 "adjustment_due": adjustment_due,
+                "adjustment_resolved": adjustment_resolved,
+                "adjustment_dismissed": adjustment_dismissed,
+                "adjustment_alert_state": adjustment_alert_state,
             }
         )
 
@@ -380,7 +441,7 @@ def get_rent_adjustments(
     )
 ):
     rentals = list_rentals_for_adjustments()
-    today = as_of or date.today()
+    today = as_of if isinstance(as_of, date) else date.today()
     results = []
 
     for rental in rentals:
@@ -388,21 +449,6 @@ def get_rent_adjustments(
         freq = AdjustmentFrequency(rental["adjustment_frequency"])
 
         notice_days = rental.get("notice_days")
-
-        next_adjustment_date = calculate_next_adjustment_date(
-            start_date=start,
-            adjustment_frequency=freq,
-            today=today,
-        )
-        adjustment_notice_date = calculate_adjustment_notice_date(next_adjustment_date, notice_days)
-
-        due_date = calculate_due_adjustment_date(
-            start_date=start,
-            adjustment_frequency=freq,
-            today=today,
-        )
-        months_until_next = months_between(today, due_date)
-
         last_adj_str = rental["last_adjustment_date"]
         last_adjustment_date = date.fromisoformat(last_adj_str) if last_adj_str else None
         months_since_last = (
@@ -412,12 +458,19 @@ def get_rent_adjustments(
         notice_sent_at_str = rental.get("notice_sent_at")
         notice_sent_at = date.fromisoformat(notice_sent_at_str) if notice_sent_at_str else None
 
-        adjustment_due = today >= due_date
-        current_cycle_notice_date = calculate_adjustment_notice_date(due_date, notice_days)
-        notice_registered = (
-            notice_sent_at is not None
-            and notice_sent_at >= current_cycle_notice_date
+        adjustment_state = _current_adjustment_state(
+            contract_id=rental["contract_id"],
+            start_date=start,
+            adjustment_frequency=freq,
+            notice_days=notice_days,
+            last_adjustment_date=last_adjustment_date,
+            notice_sent_at=notice_sent_at,
+            today=today,
         )
+        next_adjustment_date = adjustment_state["next_adjustment_date"]
+        adjustment_notice_date = adjustment_state["adjustment_notice_date"]
+        due_date = adjustment_state["due_adjustment_date"]
+        months_until_next = months_between(today, due_date)
 
         results.append(
             {
@@ -431,17 +484,17 @@ def get_rent_adjustments(
                 "current_rent": rental["current_rent"],
                 "next_adjustment_date": next_adjustment_date,
                 "adjustment_notice_date": adjustment_notice_date,
-                "requires_adjustment_notice": (
-                    today >= adjustment_notice_date
-                    and (last_adjustment_date is None or last_adjustment_date < adjustment_notice_date)
-                ),
+                "requires_adjustment_notice": adjustment_state["requires_adjustment_notice"],
                 "last_adjustment_date": last_adjustment_date,
                 "months_since_last_adjustment": months_since_last,
                 "months_until_next_adjustment": months_until_next,
                 "notice_sent_at": notice_sent_at,
-                "notice_registered": notice_registered,
-                "adjustment_due": adjustment_due,
+                "notice_registered": adjustment_state["notice_registered"],
+                "adjustment_due": adjustment_state["adjustment_due"],
                 "due_adjustment_date": due_date,
+                "adjustment_resolved": adjustment_state["adjustment_resolved"],
+                "adjustment_dismissed": adjustment_state["adjustment_dismissed"],
+                "adjustment_alert_state": adjustment_state["adjustment_alert_state"],
             }
         )
 
@@ -756,6 +809,35 @@ def revert_notice_sent_endpoint(
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
+    return {"contract_id": contract_id}
+
+
+@app.post(
+    "/contracts/{contract_id}/adjustment-alert-dismiss",
+    tags=["rent-adjustments"],
+    summary="Dismiss the current adjustment alert without changing the rent schedule",
+    response_model=AdjustmentDismissResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Contract not found or inactive"},
+    },
+)
+def dismiss_adjustment_alert_endpoint(
+    contract_id: int,
+    payload: NoticeSentRequest | None = None,
+):
+    today = date.today()
+    comment = payload.comment if payload else None
+
+    contract = get_contract(contract_id)
+    if contract is None or not contract["is_active"]:
+        raise HTTPException(status_code=404, detail="Active contract not found.")
+
+    start_date = date.fromisoformat(contract["start_date"])
+    freq = AdjustmentFrequency(contract["adjustment_frequency"])
+    due_adj_date = calculate_due_adjustment_date(start_date, freq, today)
+
+    if not dismiss_adjustment_alert(contract_id, today, comment, due_adj_date):
+        raise HTTPException(status_code=404, detail="Active contract not found.")
     return {"contract_id": contract_id}
 
 

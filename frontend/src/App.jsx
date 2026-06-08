@@ -67,7 +67,7 @@ function computePendingItems(properties) {
 
 function computeAdjustmentAlerts(properties) {
   return properties
-    .filter((p) => p.adjustment_due || (p.requires_adjustment_notice && !p.notice_registered))
+    .filter((p) => p.requires_adjustment_notice && !p.adjustment_dismissed && !p.adjustment_resolved)
     .sort((a, b) => {
       if (!a.due_adjustment_date) return 1
       if (!b.due_adjustment_date) return -1
@@ -175,7 +175,8 @@ function App() {
         tenant_name:          property.tenant_name,
         current_rent:         property.current_rent,
         start_date:           property.start_date,
-        next_adjustment_date: property.next_adjustment_date,
+        next_adjustment_date: property.due_adjustment_date ?? property.next_adjustment_date,
+        due_adjustment_date:  property.due_adjustment_date,
         adjustment_frequency: property.adjustment_frequency,
       },
       from: 'dashboard',
@@ -188,6 +189,23 @@ function App() {
       const res = await fetch(
         `http://127.0.0.1:8000/contracts/${property.contract_id}/notice-sent`,
         { method: 'POST' }
+      )
+      if (res.ok) await refreshDashboard()
+    } catch {
+      // silent — stale data is better than a crash
+    }
+  }
+
+  async function handleDismissAdjustmentAlert(property, comment) {
+    try {
+      const body = comment?.trim() ? { comment: comment.trim() } : {}
+      const res = await fetch(
+        `http://127.0.0.1:8000/contracts/${property.contract_id}/adjustment-alert-dismiss`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
       )
       if (res.ok) await refreshDashboard()
     } catch {
@@ -345,6 +363,7 @@ function App() {
             onPaymentSelect={handleNoticePaymentClick}
             onAdjustmentSelect={handleNoticeAdjustmentClick}
             onMarkNoticeSent={handleMarkNoticeSent}
+            onDismissAdjustmentAlert={handleDismissAdjustmentAlert}
           />
         </div>
       </>

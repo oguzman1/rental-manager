@@ -3050,6 +3050,73 @@ def test_notice_revert_on_nonexistent_contract_returns_404():
     assert r.status_code == 404
 
 
+def test_adjustment_alert_dismiss_hides_only_current_alert():
+    client.post("/managed-property", json=_notice_property("NEVT-DISMISS-001", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-DISMISS-001")
+
+    item_before = next(i for i in client.get("/dashboard").json() if i.get("contract_id") == cid)
+    assert item_before["requires_adjustment_notice"] is True
+    assert item_before["adjustment_dismissed"] is False
+
+    r = client.post(f"/contracts/{cid}/adjustment-alert-dismiss", json={"comment": "No corresponde"})
+    assert r.status_code == 200
+
+    item_after = next(i for i in client.get("/dashboard").json() if i.get("contract_id") == cid)
+    assert item_after["requires_adjustment_notice"] is False
+    assert item_after["adjustment_dismissed"] is True
+    assert item_after["adjustment_alert_state"] == "dismissed"
+
+
+def test_adjustment_alert_dismiss_keeps_rent_history_and_schedule():
+    start_date = _first_day_for_months_ago(13)
+    client.post("/managed-property", json=_notice_property("NEVT-DISMISS-002", start_date))
+    cid = _get_contract_id_for_rol("NEVT-DISMISS-002")
+    history_before = client.get(f"/contracts/{cid}/rent-changes").json()
+    current_item = next(i for i in client.get("/dashboard").json() if i.get("contract_id") == cid)
+
+    r = client.post(f"/contracts/{cid}/adjustment-alert-dismiss")
+    assert r.status_code == 200
+
+    history_after = client.get(f"/contracts/{cid}/rent-changes").json()
+    assert history_after == history_before
+
+    future_as_of = (datetime.date.today() + datetime.timedelta(days=370)).isoformat()
+    future_item = next(
+        i for i in client.get(f"/rent-adjustments?as_of={future_as_of}").json()
+        if i.get("contract_id") == cid
+    )
+    assert future_item["adjustment_dismissed"] is False
+    assert future_item["due_adjustment_date"] != current_item["due_adjustment_date"]
+
+
+def test_adjustment_alert_dismiss_visible_in_notice_history():
+    client.post("/managed-property", json=_notice_property("NEVT-DISMISS-003", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NEVT-DISMISS-003")
+
+    client.post(f"/contracts/{cid}/adjustment-alert-dismiss", json={"comment": "Contrato especial"})
+    events = client.get(f"/contracts/{cid}/notice-events").json()
+
+    assert events[0]["event_type"] == "dismissed"
+    assert events[0]["comment"] == "Contrato especial"
+
+
+def test_adjustment_due_false_after_rent_change_applied():
+    client.post("/managed-property", json=_notice_property("NTEST-RESOLVE-002", _first_day_for_months_ago(13)))
+    cid = _get_contract_id_for_rol("NTEST-RESOLVE-002")
+
+    r = client.post(
+        f"/contracts/{cid}/rent-changes",
+        json={"effective_from": _first_day_for_months_ago(1), "amount": 120000},
+    )
+    assert r.status_code == 201
+
+    item = next(i for i in client.get("/dashboard").json() if i.get("contract_id") == cid)
+    assert item["requires_adjustment_notice"] is False
+    assert item["adjustment_due"] is False
+    assert item["adjustment_resolved"] is True
+    assert item["adjustment_alert_state"] == "resolved"
+
+
 # Frontend targetPeriod no-rows path — verified by code inspection.
 # PaymentsView.jsx openAdd(): the payments.length === 0 branch previously called
 # setFormCustomPeriod(todayLocal().slice(0, 7)), which ignored targetPeriod.

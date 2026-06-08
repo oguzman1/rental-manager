@@ -170,7 +170,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
         {error && <div className="app-error">Error al cargar: {error}</div>}
         {!isLoading && !error && (
           <div className="table-scroll">
-            <div className="table-wrapper">
+            <div className="table-wrapper adjustments-table-wrapper">
               <table className="dashboard-table adjustments-table">
                 <thead>
                   <tr>

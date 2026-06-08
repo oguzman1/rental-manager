@@ -148,7 +148,13 @@ function App() {
       const res = await fetch(`http://127.0.0.1:8000/contracts/${property.contract_id}`)
       if (!res.ok) throw new Error()
       const contract = await res.json()
-      setRoute({ name: 'payments', contract, targetPeriod, from: 'dashboard' })
+      setRoute({
+        name: 'payments',
+        contract,
+        targetPeriod,
+        from: 'dashboard',
+        returnOnCancel: true,
+      })
     } catch {
       setRoute({
         name: 'payments',
@@ -161,6 +167,7 @@ function App() {
         },
         targetPeriod,
         from: 'dashboard',
+        returnOnCancel: true,
       })
     }
   }
@@ -267,6 +274,7 @@ function App() {
           onBack={() => handleNav(route.from || 'contracts')}
           onPaymentMutation={refreshDashboard}
           targetPeriod={route.targetPeriod}
+          returnOnCancel={route.returnOnCancel ?? false}
         />
       )
     }

@@ -85,7 +85,7 @@ function normalizeDeductions(rows) {
   return { ok: true, deductions: result }
 }
 
-function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
+function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, returnOnCancel = false }) {
   const [payments, setPayments] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -125,6 +125,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   // Shape: { source, period, enteredAmount, expectedAmount, originPaidBefore, originPaidAfter,
   //          overpaymentAmount, formDate, formNote, paymentId, nextPeriod, nextPayment }
   const [pendingOverpaymentDraft, setPendingOverpaymentDraft] = useState(null)
+  const resolverAutoOpenActiveRef = useRef(false)
 
   async function loadPayments() {
     try {
@@ -165,6 +166,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   useEffect(() => {
     if (isLoading || !targetPeriod || autoOpenedRef.current) return
     autoOpenedRef.current = true
+    resolverAutoOpenActiveRef.current = returnOnCancel
     const p = payments.find(py => py.period === targetPeriod)
     if (p && p.status === 'partial') {
       openEdit(p)
@@ -293,9 +295,12 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
   }
 
   function cancelForm() {
+    const shouldReturn = resolverAutoOpenActiveRef.current
+    resolverAutoOpenActiveRef.current = false
     setPendingOverpaymentDraft(null)
     setActiveForm(null)
     setFormError(null)
+    if (shouldReturn) onBack()
   }
 
   function handleOverlayClick(e) {
@@ -380,6 +385,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         }
         if (!res.ok) throw new Error(`Error ${res.status}`)
       }
+      resolverAutoOpenActiveRef.current = false
       setActiveForm(null)
       await loadPayments()
       await onPaymentMutation?.()
@@ -441,6 +447,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
         const errData = await res.json().catch(() => null)
         throw new Error(errData?.detail ?? `Error ${res.status}`)
       }
+      resolverAutoOpenActiveRef.current = false
       setActiveForm(null)
       await loadPayments()
       await onPaymentMutation?.()

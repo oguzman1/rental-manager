@@ -882,37 +882,51 @@
   border-left: 1px solid var(--line);
 }
 
+.adjustments-table-wrapper {
+  min-width: 0;
+}
+
 .adjustments-table {
-  min-width: 1120px;
+  table-layout: fixed;
+  min-width: 0;
 }
 
-.adjustments-table th:nth-child(5),
-.adjustments-table td:nth-child(5),
-.adjustments-table th:nth-child(6),
-.adjustments-table td:nth-child(6) {
-  min-width: 130px;
+.adjustments-table .th,
+.adjustments-table .td {
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
-.adjustments-table th:nth-child(7),
-.adjustments-table td:nth-child(7) {
-  min-width: 180px;
+.adjustments-table th:nth-child(1) { width: 11%; }
+.adjustments-table th:nth-child(2) { width: 14%; }
+.adjustments-table th:nth-child(3) { width: 15%; }
+.adjustments-table th:nth-child(4) { width: 10%; }
+.adjustments-table th:nth-child(5) { width: 13%; }
+.adjustments-table th:nth-child(6) { width: 11%; }
+.adjustments-table th:nth-child(7) { width: 15%; }
+.adjustments-table th:nth-child(8) { width: 11%; }
+
+.adjustments-table td:nth-child(2),
+.adjustments-table td:nth-child(3) {
+  white-space: normal;
 }
 
-.adjustments-table .th-actions {
-  right: auto;
-  min-width: 190px;
+.adjustments-table .badge {
+  max-width: 100%;
 }
 
+.adjustments-table .th-actions,
 .adjustments-table .td-actions {
   position: static;
   right: auto;
-  min-width: 190px;
   white-space: normal;
 }
 
 .adjustments-table .td-actions .btn-payments {
-  margin-right: 6px;
-  margin-bottom: 6px;
+  display: inline-flex;
+  margin: 0 4px 6px 0;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .current-period-card {

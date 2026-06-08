@@ -802,6 +802,8 @@ def list_dashboard_items() -> list[dict]:
                 c.end_date,
                 {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
                 cp.status               AS current_payment_status,
+                cp.expected_amount      AS current_payment_amount,
+                cp.paid_amount          AS current_payment_paid_amount,
                 ps.total_exigibles,
                 ps.saldo_pendiente,
                 pp.period_amount,
@@ -834,7 +836,9 @@ def list_dashboard_items() -> list[dict]:
                                  (SELECT SUM(d.amount) FROM payment_deductions d WHERE d.payment_id = payments.id), 0
                              ) > 0               THEN 'partial'
                         ELSE                         'pending'
-                    END AS status
+                    END AS status,
+                    expected_amount,
+                    paid_amount
                 FROM payments
                 WHERE period = strftime('%Y-%m', 'now')
             ) cp ON c.id = cp.contract_id
@@ -963,6 +967,9 @@ def list_dashboard_items() -> list[dict]:
             "start_date":             start_date_str,
             "last_adjustment_date":   row["last_adjustment_date"],
             "current_payment_status": row["current_payment_status"],
+            "current_payment_period": today_ym,
+            "current_payment_amount": row["current_payment_amount"],
+            "current_payment_paid_amount": row["current_payment_paid_amount"],
             "payment_status":         payment_status,
             "period_amount":              row["period_amount"],
             "latest_period":              row["latest_period"],

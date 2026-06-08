@@ -21,23 +21,48 @@ function computePendingItems(properties) {
   const now = new Date()
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
 
-  return properties
-    .filter((p) => p.status === 'occupied' && p.actionable_payment_period != null)
-    .map((p) => {
-      let paymentState
-      if (p.actionable_payment_status === 'partial') {
-        paymentState = 'partial'
-      } else if (p.actionable_payment_period != null && p.actionable_payment_period < currentMonth) {
-        paymentState = 'overdue'
-      } else {
-        paymentState = p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending'
-      }
-      return { ...p, paymentState }
-    })
-    .sort((a, b) => {
-      const order = { overdue: 0, partial: 1, pending: 2 }
-      return order[a.paymentState] - order[b.paymentState]
-    })
+  const result = []
+
+  for (const p of properties) {
+    if (p.status !== 'occupied' || p.actionable_payment_period == null) continue
+
+    let paymentState
+    if (p.actionable_payment_status === 'partial') {
+      paymentState = 'partial'
+    } else if (p.actionable_payment_period < currentMonth) {
+      paymentState = 'overdue'
+    } else {
+      paymentState = p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending'
+    }
+    result.push({ ...p, paymentState, _alertKey: `${p.id}_${p.actionable_payment_period}` })
+
+    // Also alert for current month if unpaid and different from the oldest actionable period
+    const currentPeriod = p.current_payment_period
+    const currentStatus = p.current_payment_status
+    if (
+      currentPeriod &&
+      currentStatus != null &&
+      currentStatus !== 'paid' &&
+      p.actionable_payment_period !== currentPeriod
+    ) {
+      const currentPaymentState = p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending'
+      result.push({
+        ...p,
+        paymentState: currentPaymentState,
+        actionable_payment_period: currentPeriod,
+        actionable_payment_status: currentStatus,
+        actionable_payment_amount: p.current_payment_amount,
+        actionable_payment_paid_amount: p.current_payment_paid_amount,
+        actionable_payment_recognized_amount: null,
+        _alertKey: `${p.id}_${currentPeriod}`,
+      })
+    }
+  }
+
+  return result.sort((a, b) => {
+    const order = { overdue: 0, partial: 1, pending: 2 }
+    return order[a.paymentState] - order[b.paymentState]
+  })
 }
 
 function computeAdjustmentAlerts(properties) {

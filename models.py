@@ -133,6 +133,9 @@ class DashboardItem(BaseModel):
     last_adjustment_date: date | None = None
     months_since_last_adjustment: int | None = None
     current_payment_status: PaymentStatus | None = None
+    current_payment_period: str | None = None
+    current_payment_amount: int | None = None
+    current_payment_paid_amount: int | None = None
     payment_status: DashboardPaymentStatus | None = None
     period_amount: int | None = None
     latest_period: str | None = None

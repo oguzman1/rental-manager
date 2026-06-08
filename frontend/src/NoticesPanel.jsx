@@ -38,7 +38,7 @@ function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAd
               <div className="notices-group-label">Pagos</div>
               {paymentNotices.map((item) => (
                 <PaymentCard
-                  key={item.id}
+                  key={item._alertKey ?? item.id}
                   item={item}
                   onClick={() => onPaymentSelect(item)}
                 />

@@ -515,6 +515,45 @@ def test_patch_payment_comment_only_leaves_status_unchanged():
     assert body["comment"] == "pendiente verificación"
 
 
+def test_patch_payment_comment_persists():
+    cid = _setup_payment_property()
+    pid = client.post(f"/contracts/{cid}/payments", json={"period": "2025-08"}).json()["id"]
+
+    r = client.patch(f"/payments/{pid}", json={"comment": "nota de prueba"})
+    assert r.status_code == 200
+    assert r.json()["comment"] == "nota de prueba"
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    assert next(p for p in payments if p["id"] == pid)["comment"] == "nota de prueba"
+
+
+def test_patch_payment_comment_can_be_cleared():
+    cid = _setup_payment_property()
+    pid = client.post(
+        f"/contracts/{cid}/payments", json={"period": "2025-09", "comment": "inicial"}
+    ).json()["id"]
+
+    r = client.patch(f"/payments/{pid}", json={"comment": None})
+    assert r.status_code == 200
+    assert r.json()["comment"] is None
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    assert next(p for p in payments if p["id"] == pid)["comment"] is None
+
+
+def test_create_payment_comment_persists():
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2025-10", "comment": "primer pago"},
+    )
+    assert r.status_code == 200
+    assert r.json()["comment"] == "primer pago"
+
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    assert next(p for p in payments if p["period"] == "2025-10")["comment"] == "primer pago"
+
+
 def test_create_payment_duplicate_period_returns_409():
     cid = _setup_payment_property()
     client.post(f"/contracts/{cid}/payments", json={"period": "2025-08"})

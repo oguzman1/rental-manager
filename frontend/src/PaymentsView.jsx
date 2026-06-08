@@ -343,7 +343,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           body: JSON.stringify({
             paid_amount: (existing.paid_amount ?? 0) + amount,
             paid_at: formDate,
-            ...(formNote ? { comment: formNote } : {}),
+            comment: formNote !== '' ? formNote : null,
             deductions: normalizedDeds,
             owner_expenses: mergeGgccOwnerExpense(existing.owner_expenses, formGgcc),
           }),
@@ -417,7 +417,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
       const body = {}
       if (editAmount !== '') body.paid_amount = newTotal
       if (editDate !== '') body.paid_at = editDate
-      if (editNote !== '') body.comment = editNote
+      body.comment = editNote !== '' ? editNote : null
       body.deductions = dedResult.deductions
       body.owner_expenses = mergeGgccOwnerExpense(editPayment.owner_expenses, editGgcc)
       const res = await fetch(`${API_BASE}/payments/${editPayment.id}`, {
@@ -498,7 +498,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           body: JSON.stringify({
             paid_amount: originPaidAfter,
             ...(formDate ? { paid_at: formDate } : {}),
-            ...(formNote ? { comment: formNote } : {}),
+            comment: formNote !== '' ? formNote : null,
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)

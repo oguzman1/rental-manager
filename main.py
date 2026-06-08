@@ -987,7 +987,7 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
         data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
     )
     paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
-    comment = data.comment if data.comment is not None else payment["comment"]
+    comment = data.comment if "comment" in data.model_fields_set else payment["comment"]
 
     # deductions absent → None (no change); [] → clear; [...] → replace
     deductions = (

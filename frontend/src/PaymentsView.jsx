@@ -286,6 +286,10 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     setFormError(null)
   }
 
+  function handleOverlayClick(e) {
+    if (e.target === e.currentTarget && !pendingOverpaymentDraft) cancelForm()
+  }
+
   async function handleAdd(e) {
     e.preventDefault()
     setIsSubmitting(true)
@@ -790,388 +794,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           <span>Día de pago: {contract.payment_day}</span>
         </div>
 
-        {/* Agregar pago form */}
-        {activeForm === 'add' && (
-          <form className="payment-form" onSubmit={handleAdd}>
-            <div className="payment-form-row">
-              {!formUseCustom ? (
-                <label className="payment-form-label">
-                  Período
-                  <select
-                    className="payment-form-input"
-                    value={formPeriod}
-                    onChange={e => handlePeriodSelect(e.target.value)}
-                    disabled={!!pendingOverpaymentDraft}
-                  >
-                    {periodOptions.map(p => (
-                      <option key={p.period} value={p.period}>
-                        {formatPeriodLabel(p.period)} — {STATUS_ES[p.status] ?? p.status}
-                      </option>
-                    ))}
-                    {nextVirtualPeriod && !payments.some(p => p.period === nextVirtualPeriod) && (
-                      <option value={nextVirtualPeriod}>
-                        Próximo período — {formatPeriodLabel(nextVirtualPeriod)}
-                      </option>
-                    )}
-                    <option value="__custom__">Otro período…</option>
-                  </select>
-                </label>
-              ) : (
-                <label className="payment-form-label">
-                  Período
-                  <input
-                    className="payment-form-input"
-                    type="text"
-                    value={formCustomPeriod}
-                    onChange={e => setFormCustomPeriod(e.target.value)}
-                    placeholder="ej. 2025-04"
-                    required
-                    disabled={!!pendingOverpaymentDraft}
-                  />
-                  {payments.length > 0 && !pendingOverpaymentDraft && (
-                    <button
-                      type="button"
-                      className="btn-link-secondary"
-                      onClick={() => setFormUseCustom(false)}
-                    >
-                      ← Seleccionar de lista
-                    </button>
-                  )}
-                </label>
-              )}
-              <label className="payment-form-label">
-                Arriendo cobrado / total ingresos
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  inputMode="numeric"
-                  value={formAmount}
-                  onChange={e => setFormAmount(formatAmountInput(e.target.value))}
-                  placeholder={`ej. ${formatAmountInput(contract.current_rent)}`}
-                  required
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Fecha pago
-                <input
-                  className="payment-form-input"
-                  type="date"
-                  value={formDate}
-                  onChange={e => setFormDate(e.target.value)}
-                  required
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Nota
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  value={formNote}
-                  onChange={e => setFormNote(e.target.value)}
-                  placeholder="opcional"
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              {(addFormIsNewRow || brokerEnabled || ggccEnabled) && (
-                <div className="deductions-section">
-                  <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
-                  {formDeductions.map((row, i) => (
-                    <div key={i} className="deduction-row">
-                      <input
-                        className="payment-form-input deduction-input-label"
-                        type="text"
-                        value={row.label}
-                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
-                        placeholder="Concepto"
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                      <input
-                        className="payment-form-input deduction-input-amount"
-                        type="text"
-                        inputMode="numeric"
-                        value={row.amount}
-                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
-                        placeholder="0"
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                      <input
-                        className="payment-form-input deduction-input-note"
-                        type="text"
-                        value={row.note}
-                        onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
-                        placeholder="Nota opcional"
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                      {!pendingOverpaymentDraft && (
-                        <button
-                          type="button"
-                          className="btn-link-secondary"
-                          onClick={() => setFormDeductions(prev => prev.filter((_, j) => j !== i))}
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  {!pendingOverpaymentDraft && (
-                    <button
-                      type="button"
-                      className="btn-link-secondary"
-                      onClick={() => setFormDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
-                    >
-                      + Agregar descuento
-                    </button>
-                  )}
-                  {brokerEnabled && !pendingOverpaymentDraft && (
-                    <div className="broker-helper">
-                      <span className="broker-helper-label">Corredora</span>
-                      <span className="broker-helper-diff">
-                        Diferencia: <strong>{formatCLP(addBrokerDiff)}</strong>
-                        {addBrokerDiff > usualBrokerFee && (
-                          <span className="text-muted">
-                            {' · '}Corredora: {formatCLP(usualBrokerFee)}
-                            {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addBrokerDiff - usualBrokerFee)}</strong>
-                          </span>
-                        )}
-                      </span>
-                      {addBrokerDiff > 0 && usualBrokerFee > 0 && (
-                        <button
-                          type="button"
-                          className="btn-link-secondary"
-                          onClick={() => imputarCorredora(addBrokerDiff, formDeductions, setFormDeductions)}
-                        >
-                          Imputar diferencia a corredora
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                    Esperado: {formatCLP(addExpected)}
-                    {' · '}Pagado: {formatCLP(addPaidAmt)}
-                    {addTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(addTotalDeductions)}</>}
-                    {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addRecognized)}</strong>
-                    {addMissing > 0 && (
-                      <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addMissing)}</strong></>
-                    )}
-                    {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(addRecognized, addExpected)}</strong>
-                    {ggccEnabled && addOwnerExpenseTotal > 0 && (
-                      <>{' · '}Gasto dueño: {formatCLP(addOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwner)}</strong></>
-                    )}
-                  </span>
-                </div>
-              )}
-              {ggccEnabled && !pendingOverpaymentDraft && (
-                <div className="ggcc-section">
-                  <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
-                  <input
-                    className="payment-form-input"
-                    type="text"
-                    inputMode="numeric"
-                    value={formGgcc}
-                    onChange={e => setFormGgcc(formatAmountInput(e.target.value))}
-                    placeholder="Monto GG.CC."
-                  />
-                  {formGgcc === '' && (
-                    <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                      Puedes registrar los GG.CC. después.
-                    </span>
-                  )}
-                </div>
-              )}
-              {!pendingOverpaymentDraft && (
-                <div className="payment-form-actions">
-                  <button className="btn-primary" type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Guardando…' : 'Guardar'}
-                  </button>
-                  <button className="btn-secondary" type="button" onClick={cancelForm}>
-                    Cancelar
-                  </button>
-                </div>
-              )}
-            </div>
-            {pendingOverpaymentDraft?.source === 'add' && overpaymentPanel}
-            {formError && <div className="payment-form-error">{formError}</div>}
-          </form>
-        )}
-
-        {/* Edit form */}
-        {activeForm === 'edit' && (
-          <form className="payment-form" onSubmit={handleEdit}>
-            <div className="payment-form-row">
-              <label className="payment-form-label">
-                Período
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  value={editPayment?.period ?? ''}
-                  disabled
-                />
-              </label>
-              <label className="payment-form-label">
-                Arriendo cobrado / total ingresos
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  inputMode="numeric"
-                  value={editAmount}
-                  onChange={e => setEditAmount(formatAmountInput(e.target.value))}
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Fecha pago
-                <input
-                  className="payment-form-input"
-                  type="date"
-                  value={editDate}
-                  onChange={e => setEditDate(e.target.value)}
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <label className="payment-form-label">
-                Nota
-                <input
-                  className="payment-form-input"
-                  type="text"
-                  value={editNote}
-                  onChange={e => setEditNote(e.target.value)}
-                  placeholder="opcional"
-                  disabled={!!pendingOverpaymentDraft}
-                />
-              </label>
-              <div className="deductions-section">
-                <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
-                {editDeductions.map((row, i) => (
-                  <div key={i} className="deduction-row">
-                    <input
-                      className="payment-form-input deduction-input-label"
-                      type="text"
-                      value={row.label}
-                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
-                      placeholder="Concepto"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                    <input
-                      className="payment-form-input deduction-input-amount"
-                      type="text"
-                      inputMode="numeric"
-                      value={row.amount}
-                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
-                      placeholder="0"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                    <input
-                      className="payment-form-input deduction-input-note"
-                      type="text"
-                      value={row.note}
-                      onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
-                      placeholder="Nota opcional"
-                      disabled={!!pendingOverpaymentDraft}
-                    />
-                    {!pendingOverpaymentDraft && (
-                      <button
-                        type="button"
-                        className="btn-link-secondary"
-                        onClick={() => setEditDeductions(prev => prev.filter((_, j) => j !== i))}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ))}
-                {!pendingOverpaymentDraft && (
-                  <button
-                    type="button"
-                    className="btn-link-secondary"
-                    onClick={() => setEditDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
-                  >
-                    + Agregar descuento
-                  </button>
-                )}
-                {brokerEnabled && !pendingOverpaymentDraft && (
-                  <div className="broker-helper">
-                    <span className="broker-helper-label">Corredora</span>
-                    <span className="broker-helper-diff">
-                      Diferencia: <strong>{formatCLP(editBrokerDiff)}</strong>
-                      {editBrokerDiff > usualBrokerFee && (
-                        <span className="text-muted">
-                          {' · '}Corredora: {formatCLP(usualBrokerFee)}
-                          {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editBrokerDiff - usualBrokerFee)}</strong>
-                        </span>
-                      )}
-                    </span>
-                    {editBrokerDiff > 0 && usualBrokerFee > 0 && (
-                      <button
-                        type="button"
-                        className="btn-link-secondary"
-                        onClick={() => imputarCorredora(editBrokerDiff, editDeductions, setEditDeductions)}
-                      >
-                        Imputar diferencia a corredora
-                      </button>
-                    )}
-                  </div>
-                )}
-                <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                  Esperado: {formatCLP(editExpected)}
-                  {' · '}Pagado: {formatCLP(editPaidAmt)}
-                  {editTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(editTotalDeductions)}</>}
-                  {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editRecognized)}</strong>
-                  {editMissing > 0 && (
-                    <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editMissing)}</strong></>
-                  )}
-                  {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(editRecognized, editExpected)}</strong>
-                  {ggccEnabled && editOwnerExpenseTotal > 0 && (
-                    <>{' · '}Gasto dueño: {formatCLP(editOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwner)}</strong></>
-                  )}
-                </span>
-              </div>
-              {ggccEnabled && !pendingOverpaymentDraft && (
-                <div className="ggcc-section">
-                  <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
-                  <input
-                    className="payment-form-input"
-                    type="text"
-                    inputMode="numeric"
-                    value={editGgcc}
-                    onChange={e => setEditGgcc(formatAmountInput(e.target.value))}
-                    placeholder="Monto GG.CC."
-                  />
-                  {editGgcc === '' && (
-                    <span className="text-muted" style={{ fontSize: '0.85em' }}>
-                      Puedes registrar los GG.CC. después.
-                    </span>
-                  )}
-                </div>
-              )}
-              {!pendingOverpaymentDraft && (
-                <div className="payment-form-actions">
-                  <button className="btn-primary" type="submit" disabled={isSubmitting}>
-                    {isSubmitting ? 'Guardando…' : 'Guardar'}
-                  </button>
-                  <button className="btn-secondary" type="button" onClick={cancelForm}>
-                    Cancelar
-                  </button>
-                </div>
-              )}
-            </div>
-            {pendingOverpaymentDraft?.source === 'edit' && overpaymentPanel}
-            {formError && <div className="payment-form-error">{formError}</div>}
-          </form>
-        )}
-
         {isLoading && <div className="app-loading">Cargando pagos…</div>}
         {!isLoading && error && <div className="app-error">Error al cargar: {error}</div>}
 
         {/* Toolbar: main action + period toggle — toggle is always independent of activeForm */}
         {!isLoading && !error && (
           <div className="payment-table-toolbar">
-            {!activeForm && (
-              <button className="btn-primary" onClick={openAdd}>
-                + Agregar pago
-              </button>
-            )}
+            <button className="btn-primary" onClick={openAdd}>
+              + Agregar pago
+            </button>
             {hiddenCount > 0 && (
               !showAll ? (
                 <button className="btn-link-secondary" onClick={() => setShowAll(true)}>
@@ -1339,6 +970,394 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
           </div>
         )}
       </div>
+
+      {/* Payment modal */}
+      {activeForm !== null && (
+        <div className="payment-modal-overlay" onClick={handleOverlayClick}>
+          <div className="payment-modal-panel">
+            <div className="payment-modal-header">
+              <span className="payment-modal-title">
+                {activeForm === 'add'
+                  ? `Agregar pago — ${contract.property_label}`
+                  : `Editar pago — ${contract.property_label}`}
+              </span>
+              <button className="payment-modal-close" type="button" onClick={cancelForm}>×</button>
+            </div>
+            <div className="payment-modal-body">
+              {/* Add form */}
+              {activeForm === 'add' && (
+                <form className="payment-form" onSubmit={handleAdd}>
+                  <div className="payment-form-row">
+                    {!formUseCustom ? (
+                      <label className="payment-form-label">
+                        Período
+                        <select
+                          className="payment-form-input"
+                          value={formPeriod}
+                          onChange={e => handlePeriodSelect(e.target.value)}
+                          disabled={!!pendingOverpaymentDraft}
+                        >
+                          {periodOptions.map(p => (
+                            <option key={p.period} value={p.period}>
+                              {formatPeriodLabel(p.period)} — {STATUS_ES[p.status] ?? p.status}
+                            </option>
+                          ))}
+                          {nextVirtualPeriod && !payments.some(p => p.period === nextVirtualPeriod) && (
+                            <option value={nextVirtualPeriod}>
+                              Próximo período — {formatPeriodLabel(nextVirtualPeriod)}
+                            </option>
+                          )}
+                          <option value="__custom__">Otro período…</option>
+                        </select>
+                      </label>
+                    ) : (
+                      <label className="payment-form-label">
+                        Período
+                        <input
+                          className="payment-form-input"
+                          type="text"
+                          value={formCustomPeriod}
+                          onChange={e => setFormCustomPeriod(e.target.value)}
+                          placeholder="ej. 2025-04"
+                          required
+                          disabled={!!pendingOverpaymentDraft}
+                        />
+                        {payments.length > 0 && !pendingOverpaymentDraft && (
+                          <button
+                            type="button"
+                            className="btn-link-secondary"
+                            onClick={() => setFormUseCustom(false)}
+                          >
+                            ← Seleccionar de lista
+                          </button>
+                        )}
+                      </label>
+                    )}
+                    <label className="payment-form-label">
+                      Arriendo cobrado / total ingresos
+                      <input
+                        className="payment-form-input"
+                        type="text"
+                        inputMode="numeric"
+                        value={formAmount}
+                        onChange={e => setFormAmount(formatAmountInput(e.target.value))}
+                        placeholder={`ej. ${formatAmountInput(contract.current_rent)}`}
+                        required
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    <label className="payment-form-label">
+                      Fecha pago
+                      <input
+                        className="payment-form-input"
+                        type="date"
+                        value={formDate}
+                        onChange={e => setFormDate(e.target.value)}
+                        required
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    <label className="payment-form-label">
+                      Nota
+                      <input
+                        className="payment-form-input"
+                        type="text"
+                        value={formNote}
+                        onChange={e => setFormNote(e.target.value)}
+                        placeholder="opcional"
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    {(addFormIsNewRow || brokerEnabled || ggccEnabled) && (
+                      <div className="deductions-section">
+                        <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
+                        {formDeductions.map((row, i) => (
+                          <div key={i} className="deduction-row">
+                            <input
+                              className="payment-form-input deduction-input-label"
+                              type="text"
+                              value={row.label}
+                              onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                              placeholder="Concepto"
+                              disabled={!!pendingOverpaymentDraft}
+                            />
+                            <input
+                              className="payment-form-input deduction-input-amount"
+                              type="text"
+                              inputMode="numeric"
+                              value={row.amount}
+                              onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
+                              placeholder="0"
+                              disabled={!!pendingOverpaymentDraft}
+                            />
+                            <input
+                              className="payment-form-input deduction-input-note"
+                              type="text"
+                              value={row.note}
+                              onChange={e => setFormDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+                              placeholder="Nota opcional"
+                              disabled={!!pendingOverpaymentDraft}
+                            />
+                            {!pendingOverpaymentDraft && (
+                              <button
+                                type="button"
+                                className="btn-link-secondary"
+                                onClick={() => setFormDeductions(prev => prev.filter((_, j) => j !== i))}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {!pendingOverpaymentDraft && (
+                          <button
+                            type="button"
+                            className="btn-link-secondary"
+                            onClick={() => setFormDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
+                          >
+                            + Agregar descuento
+                          </button>
+                        )}
+                        {brokerEnabled && !pendingOverpaymentDraft && (
+                          <div className="broker-helper">
+                            <span className="broker-helper-label">Corredora</span>
+                            <span className="broker-helper-diff">
+                              Diferencia: <strong>{formatCLP(addBrokerDiff)}</strong>
+                              {addBrokerDiff > usualBrokerFee && (
+                                <span className="text-muted">
+                                  {' · '}Corredora: {formatCLP(usualBrokerFee)}
+                                  {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addBrokerDiff - usualBrokerFee)}</strong>
+                                </span>
+                              )}
+                            </span>
+                            {addBrokerDiff > 0 && usualBrokerFee > 0 && (
+                              <button
+                                type="button"
+                                className="btn-link-secondary"
+                                onClick={() => imputarCorredora(addBrokerDiff, formDeductions, setFormDeductions)}
+                              >
+                                Imputar diferencia a corredora
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                          Esperado: {formatCLP(addExpected)}
+                          {' · '}Pagado: {formatCLP(addPaidAmt)}
+                          {addTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(addTotalDeductions)}</>}
+                          {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addRecognized)}</strong>
+                          {addMissing > 0 && (
+                            <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(addMissing)}</strong></>
+                          )}
+                          {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(addRecognized, addExpected)}</strong>
+                          {ggccEnabled && addOwnerExpenseTotal > 0 && (
+                            <>{' · '}Gasto dueño: {formatCLP(addOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(addNetOwner)}</strong></>
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    {ggccEnabled && !pendingOverpaymentDraft && (
+                      <div className="ggcc-section">
+                        <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
+                        <input
+                          className="payment-form-input"
+                          type="text"
+                          inputMode="numeric"
+                          value={formGgcc}
+                          onChange={e => setFormGgcc(formatAmountInput(e.target.value))}
+                          placeholder="Monto GG.CC."
+                        />
+                        {formGgcc === '' && (
+                          <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                            Puedes registrar los GG.CC. después.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {!pendingOverpaymentDraft && (
+                      <div className="payment-form-actions">
+                        <button className="btn-primary" type="submit" disabled={isSubmitting}>
+                          {isSubmitting ? 'Guardando…' : 'Guardar'}
+                        </button>
+                        <button className="btn-secondary" type="button" onClick={cancelForm}>
+                          Cancelar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {pendingOverpaymentDraft?.source === 'add' && overpaymentPanel}
+                  {formError && <div className="payment-form-error">{formError}</div>}
+                </form>
+              )}
+
+              {/* Edit form */}
+              {activeForm === 'edit' && (
+                <form className="payment-form" onSubmit={handleEdit}>
+                  <div className="payment-form-row">
+                    <label className="payment-form-label">
+                      Período
+                      <input
+                        className="payment-form-input"
+                        type="text"
+                        value={editPayment?.period ?? ''}
+                        disabled
+                      />
+                    </label>
+                    <label className="payment-form-label">
+                      Arriendo cobrado / total ingresos
+                      <input
+                        className="payment-form-input"
+                        type="text"
+                        inputMode="numeric"
+                        value={editAmount}
+                        onChange={e => setEditAmount(formatAmountInput(e.target.value))}
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    <label className="payment-form-label">
+                      Fecha pago
+                      <input
+                        className="payment-form-input"
+                        type="date"
+                        value={editDate}
+                        onChange={e => setEditDate(e.target.value)}
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    <label className="payment-form-label">
+                      Nota
+                      <input
+                        className="payment-form-input"
+                        type="text"
+                        value={editNote}
+                        onChange={e => setEditNote(e.target.value)}
+                        placeholder="opcional"
+                        disabled={!!pendingOverpaymentDraft}
+                      />
+                    </label>
+                    <div className="deductions-section">
+                      <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
+                      {editDeductions.map((row, i) => (
+                        <div key={i} className="deduction-row">
+                          <input
+                            className="payment-form-input deduction-input-label"
+                            type="text"
+                            value={row.label}
+                            onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, label: e.target.value } : r))}
+                            placeholder="Concepto"
+                            disabled={!!pendingOverpaymentDraft}
+                          />
+                          <input
+                            className="payment-form-input deduction-input-amount"
+                            type="text"
+                            inputMode="numeric"
+                            value={row.amount}
+                            onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
+                            placeholder="0"
+                            disabled={!!pendingOverpaymentDraft}
+                          />
+                          <input
+                            className="payment-form-input deduction-input-note"
+                            type="text"
+                            value={row.note}
+                            onChange={e => setEditDeductions(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+                            placeholder="Nota opcional"
+                            disabled={!!pendingOverpaymentDraft}
+                          />
+                          {!pendingOverpaymentDraft && (
+                            <button
+                              type="button"
+                              className="btn-link-secondary"
+                              onClick={() => setEditDeductions(prev => prev.filter((_, j) => j !== i))}
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {!pendingOverpaymentDraft && (
+                        <button
+                          type="button"
+                          className="btn-link-secondary"
+                          onClick={() => setEditDeductions(prev => [...prev, { label: '', amount: '', note: '' }])}
+                        >
+                          + Agregar descuento
+                        </button>
+                      )}
+                      {brokerEnabled && !pendingOverpaymentDraft && (
+                        <div className="broker-helper">
+                          <span className="broker-helper-label">Corredora</span>
+                          <span className="broker-helper-diff">
+                            Diferencia: <strong>{formatCLP(editBrokerDiff)}</strong>
+                            {editBrokerDiff > usualBrokerFee && (
+                              <span className="text-muted">
+                                {' · '}Corredora: {formatCLP(usualBrokerFee)}
+                                {' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editBrokerDiff - usualBrokerFee)}</strong>
+                              </span>
+                            )}
+                          </span>
+                          {editBrokerDiff > 0 && usualBrokerFee > 0 && (
+                            <button
+                              type="button"
+                              className="btn-link-secondary"
+                              onClick={() => imputarCorredora(editBrokerDiff, editDeductions, setEditDeductions)}
+                            >
+                              Imputar diferencia a corredora
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                        Esperado: {formatCLP(editExpected)}
+                        {' · '}Pagado: {formatCLP(editPaidAmt)}
+                        {editTotalDeductions > 0 && <>{' · '}Descuentos: {formatCLP(editTotalDeductions)}</>}
+                        {' · '}Reconocido: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editRecognized)}</strong>
+                        {editMissing > 0 && (
+                          <>{' · '}Pendiente: <strong style={{ color: 'var(--warn, #b45309)' }}>{formatCLP(editMissing)}</strong></>
+                        )}
+                        {' · '}Estado: <strong style={{ color: 'var(--ink)' }}>{statusPreview(editRecognized, editExpected)}</strong>
+                        {ggccEnabled && editOwnerExpenseTotal > 0 && (
+                          <>{' · '}Gasto dueño: {formatCLP(editOwnerExpenseTotal)}{' · '}Neto dueño: <strong style={{ color: 'var(--ink)' }}>{formatCLP(editNetOwner)}</strong></>
+                        )}
+                      </span>
+                    </div>
+                    {ggccEnabled && !pendingOverpaymentDraft && (
+                      <div className="ggcc-section">
+                        <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>
+                        <input
+                          className="payment-form-input"
+                          type="text"
+                          inputMode="numeric"
+                          value={editGgcc}
+                          onChange={e => setEditGgcc(formatAmountInput(e.target.value))}
+                          placeholder="Monto GG.CC."
+                        />
+                        {editGgcc === '' && (
+                          <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                            Puedes registrar los GG.CC. después.
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {!pendingOverpaymentDraft && (
+                      <div className="payment-form-actions">
+                        <button className="btn-primary" type="submit" disabled={isSubmitting}>
+                          {isSubmitting ? 'Guardando…' : 'Guardar'}
+                        </button>
+                        <button className="btn-secondary" type="button" onClick={cancelForm}>
+                          Cancelar
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {pendingOverpaymentDraft?.source === 'edit' && overpaymentPanel}
+                  {formError && <div className="payment-form-error">{formError}</div>}
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

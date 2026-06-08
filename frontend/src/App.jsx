@@ -67,7 +67,7 @@ function computePendingItems(properties) {
 
 function computeAdjustmentAlerts(properties) {
   return properties
-    .filter((p) => p.requires_adjustment_notice && (!p.notice_registered || p.adjustment_due))
+    .filter((p) => p.adjustment_due || (p.requires_adjustment_notice && !p.notice_registered))
     .sort((a, b) => {
       if (!a.due_adjustment_date) return 1
       if (!b.due_adjustment_date) return -1

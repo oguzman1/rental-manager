@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { PaymentStateBadge } from './Badge'
 import { formatCLP, daysUntil, formatRentPeriod, formatPaymentDueTiming, formatPeriodLabel } from './utils'
 
@@ -18,49 +19,98 @@ const PAYMENT_CARD_CLASS = {
 }
 
 function NoticesPanel({ paymentNotices, adjustmentNotices, onPaymentSelect, onAdjustmentSelect, onMarkNoticeSent }) {
+  const [resolveModal, setResolveModal] = useState(null)
+
   const hasPayments    = paymentNotices.length > 0
   const hasAdjustments = adjustmentNotices.length > 0
   const totalCount     = paymentNotices.length + adjustmentNotices.length
 
   return (
-    <aside className="notices-panel">
-      <div className="notices-header">
-        <span className="notices-title">Alertas activas</span>
-        {totalCount > 0 && <span className="notices-count">{totalCount}</span>}
-      </div>
+    <>
+      <aside className="notices-panel">
+        <div className="notices-header">
+          <span className="notices-title">Alertas activas</span>
+          {totalCount > 0 && <span className="notices-count">{totalCount}</span>}
+        </div>
 
-      {!hasPayments && !hasAdjustments ? (
-        <div className="notices-empty">Sin alertas activas.</div>
-      ) : (
-        <>
-          {hasPayments && (
-            <div className="notices-group">
-              <div className="notices-group-label">Pagos</div>
-              {paymentNotices.map((item) => (
-                <PaymentCard
-                  key={item._alertKey ?? item.id}
-                  item={item}
-                  onClick={() => onPaymentSelect(item)}
-                />
-              ))}
+        {!hasPayments && !hasAdjustments ? (
+          <div className="notices-empty">Sin alertas activas.</div>
+        ) : (
+          <>
+            {hasPayments && (
+              <div className="notices-group">
+                <div className="notices-group-label">Pagos</div>
+                {paymentNotices.map((item) => (
+                  <PaymentCard
+                    key={item._alertKey ?? item.id}
+                    item={item}
+                    onClick={() => onPaymentSelect(item)}
+                  />
+                ))}
+              </div>
+            )}
+            {hasAdjustments && (
+              <div className="notices-group">
+                <div className="notices-group-label">Reajustes</div>
+                {adjustmentNotices.map((item) => (
+                  <AdjustmentCard
+                    key={item.id}
+                    item={item}
+                    onResolve={() => setResolveModal(item)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+
+      {resolveModal && (
+        <div className="payment-modal-overlay" onClick={() => setResolveModal(null)}>
+          <div className="payment-modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="payment-modal-header">
+              <span className="payment-modal-title">
+                Reajuste — {resolveModal.property_label ?? resolveModal.rol}
+              </span>
+              <button className="payment-modal-close" onClick={() => setResolveModal(null)}>×</button>
             </div>
-          )}
-          {hasAdjustments && (
-            <div className="notices-group">
-              <div className="notices-group-label">Reajustes</div>
-              {adjustmentNotices.map((item) => (
-                <AdjustmentCard
-                  key={item.id}
-                  item={item}
-                  onApplyAdjustment={() => onAdjustmentSelect(item)}
-                  onMarkNoticeSent={() => onMarkNoticeSent(item)}
-                />
-              ))}
+            <div className="payment-modal-body" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.875rem' }}>
+                {resolveModal.tenant_name && (
+                  <div><span style={{ opacity: 0.6 }}>Arrendatario:</span> {resolveModal.tenant_name}</div>
+                )}
+                <div><span style={{ opacity: 0.6 }}>Renta actual:</span> {formatCLP(resolveModal.current_rent)}</div>
+                {resolveModal.due_adjustment_date && (
+                  <div>
+                    <span style={{ opacity: 0.6 }}>Vencimiento:</span>{' '}
+                    {resolveModal.due_adjustment_date}
+                    {formatAdjustmentTiming(resolveModal.due_adjustment_date) && (
+                      <span style={{ opacity: 0.6 }}> · {formatAdjustmentTiming(resolveModal.due_adjustment_date)}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
+                <button
+                  className="btn-payments"
+                  onClick={() => { setResolveModal(null); onAdjustmentSelect(resolveModal) }}
+                >
+                  Gestionar reajuste
+                </button>
+                {!resolveModal.notice_registered && (
+                  <button
+                    className="btn-payments"
+                    onClick={() => { setResolveModal(null); onMarkNoticeSent(resolveModal) }}
+                  >
+                    Registrar aviso enviado
+                  </button>
+                )}
+              </div>
             </div>
-          )}
-        </>
+          </div>
+        </div>
       )}
-    </aside>
+    </>
   )
 }
 
@@ -105,27 +155,19 @@ function PaymentCard({ item, onClick }) {
   )
 }
 
-function AdjustmentCard({ item, onApplyAdjustment, onMarkNoticeSent }) {
+function AdjustmentCard({ item, onResolve }) {
   const dateRef = item.due_adjustment_date ?? item.next_adjustment_date
   const title   = `Reajuste ${formatPeriodLabel((dateRef ?? '').slice(0, 7))}`
   const timing  = formatAdjustmentTiming(dateRef)
   const meta    = `${item.property_label ?? item.rol}: ${formatCLP(item.current_rent)}`
 
-  function handleClick() {
-    if (!item.notice_registered) {
-      onMarkNoticeSent()
-    } else if (item.adjustment_due) {
-      onApplyAdjustment()
-    }
-  }
-
   return (
     <div
       className={`notice-card ${item.adjustment_due ? 'notice-card-overdue' : 'notice-card-next_30_days'}`}
-      onClick={handleClick}
+      onClick={onResolve}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && handleClick()}
+      onKeyDown={(e) => e.key === 'Enter' && onResolve()}
     >
       <div className="notice-card-top">
         <span className="notice-card-name">{title}</span>
@@ -134,7 +176,7 @@ function AdjustmentCard({ item, onApplyAdjustment, onMarkNoticeSent }) {
       <div className="notice-card-tenant">{meta}</div>
       <button
         className="btn-payments notice-card-btn"
-        onClick={(e) => { e.stopPropagation(); handleClick() }}
+        onClick={(e) => { e.stopPropagation(); onResolve() }}
       >
         Resolver
       </button>

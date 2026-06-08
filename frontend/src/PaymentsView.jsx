@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
 import { PaymentBadge } from './Badge'
 import { formatCLP, formatPeriodLabel, formatAmountInput, parseAmountInput } from './utils'
@@ -160,6 +160,18 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod }) {
     fetchData()
     return () => { cancelled = true }
   }, [contract.id])
+
+  const autoOpenedRef = useRef(false)
+  useEffect(() => {
+    if (isLoading || !targetPeriod || autoOpenedRef.current) return
+    autoOpenedRef.current = true
+    const p = payments.find(py => py.period === targetPeriod)
+    if (p && p.status === 'partial') {
+      openEdit(p)
+    } else {
+      openAdd()
+    }
+  }, [isLoading, targetPeriod]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const sortedPayments = [...payments].sort((a, b) => b.period.localeCompare(a.period))
   const now = new Date()

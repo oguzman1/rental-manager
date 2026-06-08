@@ -143,7 +143,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                     <th className="th">Próx. reajuste</th>
                     <th className="th">Últ. reajuste</th>
                     <th className="th">Estado</th>
-                    <th className="th">Acciones</th>
+                    <th className="th th-actions">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -183,7 +183,7 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                             noticeSentAt={item.notice_sent_at}
                           />
                         </td>
-                        <td className="td" onClick={(e) => e.stopPropagation()}>
+                        <td className="td td-actions" onClick={(e) => e.stopPropagation()}>
                           {!item.notice_registered ? (
                             formItemId === item.id ? (
                               <button

@@ -634,6 +634,55 @@ def test_delete_payment_keeps_period_as_pending():
     assert match["period"] == "2025-12"
 
 
+def test_patch_payment_expected_amount_updates_and_clears_overpayment():
+    cid = _setup_payment_property()
+    payment = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2027-01", "paid_amount": 800000, "paid_at": "2027-01-05"},
+    ).json()
+    pid = payment["id"]
+    assert payment["expected_amount"] == 500000
+    assert payment["overpayment"] == 300000
+
+    r = client.patch(f"/payments/{pid}", json={"expected_amount": 800000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expected_amount"] == 800000
+    assert body["status"] == "paid"
+    assert body["overpayment"] == 0
+
+
+def test_patch_payment_expected_amount_with_paid_amount_no_overpayment():
+    cid = _setup_payment_property()
+    payment = client.post(f"/contracts/{cid}/payments", json={"period": "2027-02"}).json()
+    pid = payment["id"]
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 800000, "expected_amount": 800000, "paid_at": "2027-02-05"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paid_amount"] == 800000
+    assert body["expected_amount"] == 800000
+    assert body["status"] == "paid"
+    assert body["overpayment"] == 0
+
+
+def test_patch_payment_expected_amount_absent_preserves_existing():
+    cid = _setup_payment_property()
+    payment = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2027-03", "paid_amount": 500000, "paid_at": "2027-03-05"},
+    ).json()
+    pid = payment["id"]
+    original_expected = payment["expected_amount"]
+
+    r = client.patch(f"/payments/{pid}", json={"comment": "nota"})
+    assert r.status_code == 200
+    assert r.json()["expected_amount"] == original_expected
+
+
 def test_dashboard_current_payment_status_none_when_no_payment():
     payload = {
         "property": {

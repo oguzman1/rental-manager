@@ -2129,16 +2129,27 @@ def update_payment(
     comment: str | None,
     deductions: list[dict] | None = None,
     owner_expenses: list[dict] | None = None,
+    expected_amount: int | None = None,
 ) -> None:
     with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE payments
-            SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
-            WHERE id = ?
-            """,
-            (paid_amount, paid_at, status, comment, payment_id),
-        )
+        if expected_amount is not None:
+            conn.execute(
+                """
+                UPDATE payments
+                SET paid_amount = ?, paid_at = ?, status = ?, comment = ?, expected_amount = ?
+                WHERE id = ?
+                """,
+                (paid_amount, paid_at, status, comment, expected_amount, payment_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE payments
+                SET paid_amount = ?, paid_at = ?, status = ?, comment = ?
+                WHERE id = ?
+                """,
+                (paid_amount, paid_at, status, comment, payment_id),
+            )
         if deductions is not None:
             _replace_deductions(conn, payment_id, deductions)
         if owner_expenses is not None:

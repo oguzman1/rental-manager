@@ -1083,23 +1083,30 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
         if "owner_expenses" in data.model_fields_set
         else None
     )
+    # expected_amount absent → keep stored value; provided → replace
+    expected_amount = (
+        data.expected_amount
+        if "expected_amount" in data.model_fields_set and data.expected_amount is not None
+        else None
+    )
 
     # Use updated deductions list (or existing ones from DB) for recognized_amount status calc
     if deductions is not None:
         effective_deductions = deductions
     else:
         effective_deductions = payment.get("deductions", [])
+    effective_expected = expected_amount if expected_amount is not None else payment["expected_amount"]
     paid = paid_amount or 0
     total_deductions = sum(d["amount"] for d in effective_deductions)
     recognized = paid + total_deductions
     if recognized == 0:
         status = "pending"
-    elif recognized >= payment["expected_amount"]:
+    elif recognized >= effective_expected:
         status = "paid"
     else:
         status = "partial"
 
-    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses)
+    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses, expected_amount=expected_amount)
     return get_payment(payment_id)
 
 

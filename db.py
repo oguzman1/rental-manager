@@ -2157,6 +2157,138 @@ def update_payment(
         conn.commit()
 
 
+def rent_change_payment_atomic(
+    contract_id: int,
+    period: str,
+    new_rent_amount: int,
+    paid_amount: int | None,
+    paid_at: str | None,
+    comment: str | None,
+    payment_id: int | None = None,
+    deductions: list[dict] | None = None,
+    owner_expenses: list[dict] | None = None,
+) -> dict:
+    """Create a rent change and save/update the payment in one SQLite transaction.
+
+    If rent_change creation fails (chronology, inactive contract), no payment is
+    touched. If the payment step fails, the rent_change insert is rolled back.
+    """
+    deductions_list = deductions or []
+    owner_expenses_list = owner_expenses or []
+
+    with get_connection() as conn:
+        # --- Validate contract ---
+        contract_row = conn.execute(
+            "SELECT id, start_date, is_active, payment_day FROM contracts WHERE id = ?",
+            (contract_id,),
+        ).fetchone()
+        if contract_row is None or not contract_row[2]:
+            raise LookupError("Active contract not found.")
+
+        start_date_str = contract_row[1]
+        payment_day = contract_row[3]
+        effective_from = period + "-01"
+
+        # --- Chronological validation ---
+        if effective_from < start_date_str:
+            raise ValueError("effective_from must be on or after the contract start_date.")
+
+        latest_rc = conn.execute(
+            """
+            SELECT effective_from FROM rent_changes
+            WHERE contract_id = ?
+            ORDER BY effective_from DESC, id DESC
+            LIMIT 1
+            """,
+            (contract_id,),
+        ).fetchone()
+        if latest_rc and effective_from <= latest_rc[0]:
+            raise ValueError(
+                "effective_from must be strictly after the latest rent change date."
+            )
+
+        # --- Insert rent_change (no commit yet) ---
+        rc_cursor = conn.execute(
+            """
+            INSERT INTO rent_changes (contract_id, effective_from, amount, adjustment_pct, comment)
+            VALUES (?, ?, ?, NULL, NULL)
+            """,
+            (contract_id, effective_from, new_rent_amount),
+        )
+        rent_change_id = rc_cursor.lastrowid
+
+        # --- Compute status ---
+        paid = paid_amount or 0
+        total_deductions = sum(d["amount"] for d in deductions_list)
+        recognized = paid + total_deductions
+        if recognized == 0:
+            status = "pending"
+        elif recognized >= new_rent_amount:
+            status = "paid"
+        else:
+            status = "partial"
+
+        # --- Update existing payment or create new one ---
+        if payment_id is not None:
+            existing = conn.execute(
+                "SELECT id FROM payments WHERE id = ? AND contract_id = ?",
+                (payment_id, contract_id),
+            ).fetchone()
+            if existing is None:
+                raise LookupError("Payment not found for this contract.")
+            conn.execute(
+                """
+                UPDATE payments
+                SET paid_amount = ?, paid_at = ?, status = ?, comment = ?, expected_amount = ?
+                WHERE id = ?
+                """,
+                (paid_amount, paid_at, status, comment, new_rent_amount, payment_id),
+            )
+            if deductions is not None:
+                _replace_deductions(conn, payment_id, deductions_list)
+            if owner_expenses is not None:
+                _replace_owner_expenses(conn, payment_id, owner_expenses_list)
+            final_payment_id = payment_id
+        else:
+            year, month = int(period[:4]), int(period[5:7])
+            last_day = monthrange(year, month)[1]
+            due_date = date(year, month, min(payment_day, last_day)).isoformat()
+            try:
+                p_cursor = conn.execute(
+                    """
+                    INSERT INTO payments
+                        (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (contract_id, period, due_date, new_rent_amount,
+                     paid_amount, paid_at, status, comment),
+                )
+            except sqlite3.IntegrityError:
+                raise ValueError(
+                    f"A payment for period {period} already exists on this contract."
+                )
+            final_payment_id = p_cursor.lastrowid
+            if deductions_list:
+                _insert_deductions(conn, final_payment_id, deductions_list)
+            if owner_expenses_list:
+                _insert_owner_expenses(conn, final_payment_id, owner_expenses_list)
+
+        # --- Single commit covers both operations ---
+        conn.commit()
+
+        # Read results while connection is still open
+        row = conn.execute(
+            "SELECT * FROM payments WHERE id = ?", (final_payment_id,)
+        ).fetchone()
+        deductions_out = _load_deductions(conn, final_payment_id)
+        owner_expenses_out = _load_owner_expenses(conn, final_payment_id)
+
+    return {
+        "rent_change_id": rent_change_id,
+        "payment": _payment_row_to_dict(row, deductions_out, owner_expenses_out),
+    }
+
+
 def delete_payment(payment_id: int) -> bool:
     """Clear payment data while keeping the period row in the schedule.
 

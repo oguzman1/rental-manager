@@ -578,8 +578,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   }
 
   // Registers the entered amount as a new rent and saves the payment at the new expected amount.
-  // Creates a rent_change effective from the first day of the payment period, then patches/creates
-  // the payment with expected_amount = enteredAmount so no overpayment remains.
+  // Uses the atomic backend endpoint so rent_change and payment are committed in one transaction.
   async function saveAsRentChange() {
     if (!pendingOverpaymentDraft) return
     const {
@@ -594,57 +593,39 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       paymentId,
     } = pendingOverpaymentDraft
 
+    let deductions = []
+    let owner_expenses = []
+    if (source === 'add' && draftDeductions) {
+      deductions = draftDeductions
+      owner_expenses = draftOwnerExpenses ?? []
+    } else if (source === 'edit') {
+      const dedResult = normalizeDeductions(editDeductions)
+      if (dedResult.ok) deductions = dedResult.deductions
+      owner_expenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
+    }
+
+    const body = {
+      period,
+      new_rent_amount: enteredAmount,
+      paid_amount: originPaidAfter,
+      comment: formNote !== '' ? formNote : null,
+      payment_id: paymentId ?? null,
+      deductions,
+      owner_expenses,
+    }
+    if (formDate) body.paid_at = formDate
+
     setIsRentChangeSaving(true)
     setFormError(null)
     try {
-      // Step 1: create rent change effective from first day of the period
-      const rcRes = await fetch(`${API_BASE}/contracts/${contract.id}/rent-changes`, {
+      const res = await fetch(`${API_BASE}/contracts/${contract.id}/rent-change-payment`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ effective_from: period + '-01', amount: enteredAmount }),
+        body: JSON.stringify(body),
       })
-      if (!rcRes.ok) {
-        const errData = await rcRes.json().catch(() => null)
-        throw new Error(errData?.detail ?? `Error al crear reajuste: ${rcRes.status}`)
-      }
-
-      // Step 2: save the payment — expected_amount updated to remove the overpayment
-      if (paymentId != null) {
-        const body = {
-          paid_amount: originPaidAfter,
-          expected_amount: enteredAmount,
-          ...(formDate ? { paid_at: formDate } : {}),
-          comment: formNote !== '' ? formNote : null,
-        }
-        if (source === 'add' && draftDeductions) {
-          body.deductions = draftDeductions
-          if (draftOwnerExpenses) body.owner_expenses = draftOwnerExpenses
-        } else if (source === 'edit') {
-          const dedResult = normalizeDeductions(editDeductions)
-          if (dedResult.ok) body.deductions = dedResult.deductions
-          body.owner_expenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
-        }
-        const pRes = await fetch(`${API_BASE}/payments/${paymentId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        })
-        if (!pRes.ok) throw new Error(`Error al guardar pago: ${pRes.status}`)
-      } else {
-        // New period — backend now picks up new current_rent from the rent change
-        const pRes = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            period,
-            paid_amount: originPaidAfter || null,
-            paid_at: formDate || null,
-            comment: formNote || null,
-            deductions: draftDeductions ?? [],
-            owner_expenses: draftOwnerExpenses ?? [],
-          }),
-        })
-        if (!pRes.ok) throw new Error(`Error al guardar pago: ${pRes.status}`)
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        throw new Error(errData?.detail ?? `Error al registrar reajuste: ${res.status}`)
       }
 
       setPendingOverpaymentDraft(null)

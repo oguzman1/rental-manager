@@ -44,6 +44,7 @@ from db import (
     list_rentals_for_adjustments,
     list_tenants,
     mark_notice_sent,
+    rent_change_payment_atomic,
     revert_notice_sent,
     tenant_has_any_contract,
     update_contract,
@@ -80,6 +81,8 @@ from models import (
     RentAdjustmentItem,
     RentChangeCreate,
     RentChangeItem,
+    RentChangePaymentCreate,
+    RentChangePaymentResponse,
     RentalInfo,
     TenantCreate,
     TenantDetailResponse,
@@ -1180,6 +1183,38 @@ def create_rent_change_endpoint(contract_id: int, data: RentChangeCreate):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return get_rent_change(new_id)
+
+
+@app.post(
+    "/contracts/{contract_id}/rent-change-payment",
+    tags=["rent-adjustments", "payments"],
+    summary="Atomically create a rent change and save/update the payment for that period",
+    response_model=RentChangePaymentResponse,
+    status_code=201,
+    responses={
+        400: {"model": ErrorResponse, "description": "Chronological violation or period conflict"},
+        404: {"model": ErrorResponse, "description": "Contract or payment not found"},
+    },
+)
+def rent_change_payment_endpoint(contract_id: int, data: RentChangePaymentCreate):
+    try:
+        result = rent_change_payment_atomic(
+            contract_id=contract_id,
+            period=data.period,
+            new_rent_amount=data.new_rent_amount,
+            paid_amount=data.paid_amount,
+            paid_at=str(data.paid_at) if data.paid_at is not None else None,
+            comment=data.comment,
+            payment_id=data.payment_id,
+            deductions=[d.model_dump() for d in data.deductions],
+            owner_expenses=[e.model_dump() for e in data.owner_expenses],
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    rc = get_rent_change(result["rent_change_id"])
+    return {"rent_change": rc, "payment": result["payment"]}
 
 
 @app.delete(

@@ -329,6 +329,29 @@ class PaymentUpdate(BaseModel):
     expected_amount: int | None = Field(default=None, gt=0)
 
 
+class RentChangePaymentCreate(BaseModel):
+    period: str
+    new_rent_amount: int = Field(gt=0)
+    paid_amount: int | None = Field(default=None, ge=0)
+    paid_at: date | None = None
+    comment: str | None = None
+    payment_id: int | None = None
+    deductions: list[PaymentDeductionInput] = Field(default_factory=list)
+    owner_expenses: list[OwnerExpenseInput] = Field(default_factory=list)
+
+    @field_validator("period")
+    @classmethod
+    def period_must_be_yyyy_mm(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
+            raise ValueError("period must be in YYYY-MM format (e.g. 2025-04)")
+        return value
+
+
+class RentChangePaymentResponse(BaseModel):
+    rent_change: RentChangeItem
+    payment: "PaymentResponse"
+
+
 class PaymentResponse(BaseModel):
     id: int
     contract_id: int

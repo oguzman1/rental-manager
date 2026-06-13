@@ -326,6 +326,7 @@ class PaymentUpdate(BaseModel):
     comment: str | None = None
     deductions: list[PaymentDeductionInput] | None = None
     owner_expenses: list[OwnerExpenseInput] | None = None
+    expected_amount: int | None = Field(default=None, gt=0)
 
 
 class PaymentResponse(BaseModel):

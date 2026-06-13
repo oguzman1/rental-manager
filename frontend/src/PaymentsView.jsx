@@ -125,6 +125,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   // Shape: { source, period, enteredAmount, expectedAmount, originPaidBefore, originPaidAfter,
   //          overpaymentAmount, formDate, formNote, paymentId, nextPeriod, nextPayment }
   const [pendingOverpaymentDraft, setPendingOverpaymentDraft] = useState(null)
+  const [isRentChangeSaving, setIsRentChangeSaving] = useState(false)
   const resolverAutoOpenActiveRef = useRef(false)
 
   async function loadPayments() {
@@ -221,6 +222,17 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setFormAmount(formatAmountInput(p ? getPrefillAmount(p) : contract.current_rent))
       setFormDate(todayLocal())
       setFormNote('')
+      if (p) {
+        setFormDeductions(
+          (p.deductions ?? []).map(d => ({
+            label: d.label,
+            amount: d.amount ? formatAmountInput(String(d.amount)) : '',
+            note: d.note ?? '',
+          }))
+        )
+        const existingGgcc = (p.owner_expenses ?? []).find(e => isGgccExpense(e))
+        setFormGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
+      }
       setFormError(null)
       setActiveForm('add')
       return
@@ -565,6 +577,88 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     }
   }
 
+  // Registers the entered amount as a new rent and saves the payment at the new expected amount.
+  // Creates a rent_change effective from the first day of the payment period, then patches/creates
+  // the payment with expected_amount = enteredAmount so no overpayment remains.
+  async function saveAsRentChange() {
+    if (!pendingOverpaymentDraft) return
+    const {
+      source,
+      period,
+      enteredAmount,
+      originPaidAfter,
+      formDate,
+      formNote,
+      formDeductions: draftDeductions,
+      formOwnerExpenses: draftOwnerExpenses,
+      paymentId,
+    } = pendingOverpaymentDraft
+
+    setIsRentChangeSaving(true)
+    setFormError(null)
+    try {
+      // Step 1: create rent change effective from first day of the period
+      const rcRes = await fetch(`${API_BASE}/contracts/${contract.id}/rent-changes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ effective_from: period + '-01', amount: enteredAmount }),
+      })
+      if (!rcRes.ok) {
+        const errData = await rcRes.json().catch(() => null)
+        throw new Error(errData?.detail ?? `Error al crear reajuste: ${rcRes.status}`)
+      }
+
+      // Step 2: save the payment — expected_amount updated to remove the overpayment
+      if (paymentId != null) {
+        const body = {
+          paid_amount: originPaidAfter,
+          expected_amount: enteredAmount,
+          ...(formDate ? { paid_at: formDate } : {}),
+          comment: formNote !== '' ? formNote : null,
+        }
+        if (source === 'add' && draftDeductions) {
+          body.deductions = draftDeductions
+          if (draftOwnerExpenses) body.owner_expenses = draftOwnerExpenses
+        } else if (source === 'edit') {
+          const dedResult = normalizeDeductions(editDeductions)
+          if (dedResult.ok) body.deductions = dedResult.deductions
+          body.owner_expenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
+        }
+        const pRes = await fetch(`${API_BASE}/payments/${paymentId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!pRes.ok) throw new Error(`Error al guardar pago: ${pRes.status}`)
+      } else {
+        // New period — backend now picks up new current_rent from the rent change
+        const pRes = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            period,
+            paid_amount: originPaidAfter || null,
+            paid_at: formDate || null,
+            comment: formNote || null,
+            deductions: draftDeductions ?? [],
+            owner_expenses: draftOwnerExpenses ?? [],
+          }),
+        })
+        if (!pRes.ok) throw new Error(`Error al guardar pago: ${pRes.status}`)
+      }
+
+      setPendingOverpaymentDraft(null)
+      resolverAutoOpenActiveRef.current = false
+      setActiveForm(null)
+      await loadPayments()
+      await onPaymentMutation?.()
+    } catch (err) {
+      setFormError(err.message)
+    } finally {
+      setIsRentChangeSaving(false)
+    }
+  }
+
   const periodOptions = [...payments].sort((a, b) => a.period.localeCompare(b.period))
   const addFormTargetPeriod = formUseCustom ? formCustomPeriod : formPeriod
   const addFormIsNewRow = !payments.some(p => p.period === addFormTargetPeriod)
@@ -738,7 +832,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     overpaymentPanel = (
       <div className="payment-overpayment-inline">
         <p className="payment-overpayment-heading">
-          Se detectó un sobrepago
+          ¿Cómo quieres tratar la diferencia?
         </p>
         <p className="payment-overpayment-confirm-text">
           El monto ingresado supera lo esperado para este período.
@@ -765,9 +859,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               type="button"
               className="btn-primary"
               onClick={() => saveFromDraft(true)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isRentChangeSaving}
             >
-              {isSubmitting ? 'Guardando…' : 'Guardar y abonar excedente'}
+              {isSubmitting ? 'Guardando…' : 'Pasar diferencia al siguiente mes'}
             </button>
           )}
           {nextBlocked && (
@@ -775,7 +869,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               type="button"
               className="btn-warn-sm"
               onClick={() => saveFromDraft(false)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isRentChangeSaving}
             >
               {isSubmitting ? 'Guardando…' : 'Guardar sin abonar excedente'}
             </button>
@@ -783,10 +877,20 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => setPendingOverpaymentDraft(null)}
-            disabled={isSubmitting}
+            onClick={saveAsRentChange}
+            disabled={isSubmitting || isRentChangeSaving}
           >
-            Volver a editar
+            {isRentChangeSaving
+              ? 'Guardando…'
+              : `Registrar reajuste — Actualizar arriendo a ${formatCLP(enteredAmount)} desde ${formatPeriodLabel(period)}`}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setPendingOverpaymentDraft(null)}
+            disabled={isSubmitting || isRentChangeSaving}
+          >
+            Editar monto
           </button>
         </div>
       </div>
@@ -1087,8 +1191,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                         disabled={!!pendingOverpaymentDraft}
                       />
                     </label>
-                    {(addFormIsNewRow || brokerEnabled || ggccEnabled) && (
-                      <div className="deductions-section">
+                    <div className="deductions-section">
                         <span className="deductions-section-label">Descuentos / liquidación al dueño</span>
                         {formDeductions.map((row, i) => (
                           <div key={i} className="deduction-row">
@@ -1174,7 +1277,6 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                           )}
                         </span>
                       </div>
-                    )}
                     {ggccEnabled && !pendingOverpaymentDraft && (
                       <div className="ggcc-section">
                         <span className="ggcc-section-label">GG.CC. — Gasto dueño</span>

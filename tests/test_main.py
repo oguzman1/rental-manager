@@ -417,6 +417,38 @@ def _setup_payment_property() -> int:
     return _get_contract_id_for_rol(_PAYMENT_ROL)
 
 
+_ATOMIC_ROL = "09001-00099"
+
+_ATOMIC_PAYMENT_PROPERTY = {
+    "property": {
+        "comuna": "SANTIAGO",
+        "rol": _ATOMIC_ROL,
+        "address": "Av. Siempre Viva 999",
+        "destination": "HABITACIONAL",
+        "status": "occupied",
+        "fojas": "99",
+        "property_number": "99",
+        "year": 2020,
+        "fiscal_appraisal": 100000000,
+    },
+    "rental": {
+        "tenant_name": "Arrendatario Atomico",
+        "payment_day": 5,
+        "property_label": "depto atomico",
+        "current_rent": 500000,
+        "adjustment_frequency": "annual",
+        "start_date": "2023-01-01",
+        "notice_days": 60,
+        "adjustment_month": "january",
+    },
+}
+
+
+def _setup_atomic_payment_property() -> int:
+    client.post("/managed-property", json=_ATOMIC_PAYMENT_PROPERTY)
+    return _get_contract_id_for_rol(_ATOMIC_ROL)
+
+
 def test_create_payment_derives_due_date_from_payment_day():
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2025-04"})
@@ -686,7 +718,7 @@ def test_patch_payment_expected_amount_absent_preserves_existing():
 # --- Atomic rent-change-payment endpoint ---
 
 def test_atomic_rent_change_payment_existing_payment():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     # Create a pending payment with the original rent
     pmt = client.post(f"/contracts/{cid}/payments", json={"period": "2028-01"}).json()
     pid = pmt["id"]
@@ -714,7 +746,7 @@ def test_atomic_rent_change_payment_existing_payment():
 
 
 def test_atomic_rent_change_payment_new_payment():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     r = client.post(
         f"/contracts/{cid}/rent-change-payment",
         json={
@@ -736,7 +768,7 @@ def test_atomic_rent_change_payment_new_payment():
 
 
 def test_atomic_chronology_rejection_leaves_payment_unchanged():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     # Create a later rent change first
     client.post(f"/contracts/{cid}/rent-changes", json={"effective_from": "2028-06-01", "amount": 600000})
     # Create a payment for an earlier period
@@ -752,11 +784,14 @@ def test_atomic_chronology_rejection_leaves_payment_unchanged():
     assert r.status_code == 400
     assert "strictly after" in r.json()["detail"]
 
-    # Payment must be untouched
-    pmt_after = client.get(f"/contracts/{cid}/payments").json()
-    p = next(p for p in pmt_after if p["id"] == pid)
-    assert p["expected_amount"] == original_expected
-    assert p["paid_amount"] == 550000
+    # Payment must be untouched — read directly from DB to avoid _ensure_payment_periods
+    conn = _sqlite3.connect("test_rental_manager.db")
+    row = conn.execute(
+        "SELECT expected_amount, paid_amount FROM payments WHERE id = ?", (pid,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == original_expected
+    assert row[1] == 550000
 
     # No new rent change must exist for 2028-04-01
     rcs = client.get(f"/contracts/{cid}/rent-changes").json()
@@ -764,7 +799,7 @@ def test_atomic_chronology_rejection_leaves_payment_unchanged():
 
 
 def test_atomic_invalid_payment_id_rejects_and_no_rent_change():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     rcs_before = client.get(f"/contracts/{cid}/rent-changes").json()
 
     r = client.post(
@@ -784,7 +819,7 @@ def test_atomic_invalid_payment_id_rejects_and_no_rent_change():
 
 
 def test_atomic_future_periods_reflect_new_rent():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     # Register rent change for 2028-09 via atomic endpoint
     r = client.post(
         f"/contracts/{cid}/rent-change-payment",
@@ -797,7 +832,7 @@ def test_atomic_future_periods_reflect_new_rent():
 
 
 def test_atomic_historical_periods_before_change_unchanged():
-    cid = _setup_payment_property()
+    cid = _setup_atomic_payment_property()
     # Create a payment for a period before the atomic change
     early = client.post(
         f"/contracts/{cid}/payments",
@@ -812,11 +847,14 @@ def test_atomic_historical_periods_before_change_unchanged():
         json={"period": "2028-12", "new_rent_amount": 900000, "paid_amount": 900000, "paid_at": "2028-12-05"},
     )
 
-    # Earlier payment must be untouched
-    pmts = client.get(f"/contracts/{cid}/payments").json()
-    early_after = next(p for p in pmts if p["id"] == early_id)
-    assert early_after["expected_amount"] == early_expected
-    assert early_after["paid_amount"] == 500000
+    # Earlier payment must be untouched — read directly from DB to avoid _ensure_payment_periods
+    conn = _sqlite3.connect("test_rental_manager.db")
+    row = conn.execute(
+        "SELECT expected_amount, paid_amount FROM payments WHERE id = ?", (early_id,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == early_expected
+    assert row[1] == 500000
 
 
 def test_dashboard_current_payment_status_none_when_no_payment():

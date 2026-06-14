@@ -562,9 +562,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                   aria-label="Cerrar contrato"
                                   onClick={() => handleClose(item)}
                                 >
-                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                    <line x1="3" y1="3" x2="11" y2="11"/>
-                                    <line x1="11" y1="3" x2="3" y2="11"/>
+                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="6" width="8" height="6" rx="1"/>
+                                    <path d="M5 6V4.5a2 2 0 0 1 4 0V6"/>
                                   </svg>
                                 </button>
                                 {item.contract_document_path && (

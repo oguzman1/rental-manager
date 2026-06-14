@@ -1001,8 +1001,16 @@ def create_payment(contract_id: int, data: PaymentCreate):
     due_date = _derive_due_date(data.period, contract["payment_day"])
     expected_amount = contract["current_rent"]
 
-    paid_amount = data.paid_amount
-    paid_at = str(data.paid_at) if data.paid_at is not None else None
+    valid_entries = [e for e in data.payment_entries if e.amount > 0]
+    if valid_entries:
+        paid_amount = sum(e.amount for e in valid_entries)
+        paid_at_dates = [str(e.paid_at) for e in valid_entries if e.paid_at is not None]
+        paid_at = max(paid_at_dates) if paid_at_dates else None
+        entries_to_save = [e.model_dump() for e in valid_entries]
+    else:
+        paid_amount = data.paid_amount
+        paid_at = str(data.paid_at) if data.paid_at is not None else None
+        entries_to_save = []
 
     paid = paid_amount or 0
     deductions = [d.model_dump() for d in data.deductions]
@@ -1029,6 +1037,7 @@ def create_payment(contract_id: int, data: PaymentCreate):
             deductions=deductions,
             owner_expenses=owner_expenses,
             carry_forward_waived=data.carry_forward_waived,
+            payment_entries=entries_to_save,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -1069,10 +1078,18 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     if payment is None:
         raise HTTPException(status_code=404, detail="Payment not found.")
 
-    paid_amount = (
-        data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
-    )
-    paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
+    if "payment_entries" in data.model_fields_set and data.payment_entries is not None:
+        valid_entries = [e for e in data.payment_entries if e.amount > 0]
+        paid_amount = sum(e.amount for e in valid_entries) or None
+        paid_at_dates = [str(e.paid_at) for e in valid_entries if e.paid_at is not None]
+        paid_at = max(paid_at_dates) if paid_at_dates else None
+        entries_to_save = [e.model_dump() for e in valid_entries]
+    else:
+        paid_amount = (
+            data.paid_amount if data.paid_amount is not None else payment["paid_amount"]
+        )
+        paid_at = str(data.paid_at) if data.paid_at is not None else payment["paid_at"]
+        entries_to_save = None
     comment = data.comment if "comment" in data.model_fields_set else payment["comment"]
 
     # deductions absent → None (no change); [] → clear; [...] → replace
@@ -1116,7 +1133,18 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     else:
         status = "partial"
 
-    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses, expected_amount=expected_amount, carry_forward_waived=carry_forward_waived)
+    update_payment(
+        payment_id,
+        paid_amount,
+        paid_at,
+        status,
+        comment,
+        deductions=deductions,
+        owner_expenses=owner_expenses,
+        expected_amount=expected_amount,
+        carry_forward_waived=carry_forward_waived,
+        payment_entries=entries_to_save,
+    )
     return get_payment(payment_id)
 
 

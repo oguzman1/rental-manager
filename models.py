@@ -304,6 +304,19 @@ class OwnerExpenseResponse(BaseModel):
     sort_order: int
 
 
+class PaymentEntryInput(BaseModel):
+    amount: int = Field(gt=0)
+    paid_at: date | None = None
+    note: str | None = None
+
+
+class PaymentEntryResponse(BaseModel):
+    id: int | None = None
+    amount: int
+    paid_at: date | None = None
+    note: str | None = None
+
+
 class PaymentCreate(BaseModel):
     period: str
     paid_amount: int | None = Field(default=None, ge=0)
@@ -312,6 +325,7 @@ class PaymentCreate(BaseModel):
     deductions: list[PaymentDeductionInput] = Field(default_factory=list)
     owner_expenses: list[OwnerExpenseInput] = Field(default_factory=list)
     carry_forward_waived: bool = False
+    payment_entries: list[PaymentEntryInput] = Field(default_factory=list)
 
     @field_validator("period")
     @classmethod
@@ -329,6 +343,7 @@ class PaymentUpdate(BaseModel):
     owner_expenses: list[OwnerExpenseInput] | None = None
     expected_amount: int | None = Field(default=None, gt=0)
     carry_forward_waived: bool | None = None
+    payment_entries: list[PaymentEntryInput] | None = None
 
 
 class RentChangePaymentCreate(BaseModel):
@@ -368,6 +383,7 @@ class PaymentResponse(BaseModel):
     created_at: date
     deductions: list[PaymentDeductionResponse] = Field(default_factory=list)
     owner_expenses: list[OwnerExpenseResponse] = Field(default_factory=list)
+    payment_entries: list[PaymentEntryResponse] = Field(default_factory=list)
     recognized_amount: int = 0
     overpayment: int = 0
     net_owner_amount: int = 0

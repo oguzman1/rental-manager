@@ -100,16 +100,14 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   const [formPeriod, setFormPeriod] = useState('')
   const [formUseCustom, setFormUseCustom] = useState(false)
   const [formCustomPeriod, setFormCustomPeriod] = useState('')
-  const [formAmount, setFormAmount] = useState('')
-  const [formDate, setFormDate] = useState(todayLocal())
+  const [formEntries, setFormEntries] = useState([{ amount: '', paid_at: todayLocal(), note: '' }])
   const [formNote, setFormNote] = useState('')
   const [formDeductions, setFormDeductions] = useState([])
   const [formGgcc, setFormGgcc] = useState('')
 
   // Edit form
   const [editPayment, setEditPayment] = useState(null)
-  const [editAmount, setEditAmount] = useState('')
-  const [editDate, setEditDate] = useState('')
+  const [editEntries, setEditEntries] = useState([])
   const [editNote, setEditNote] = useState('')
   const [editDeductions, setEditDeductions] = useState([])
   const [editGgcc, setEditGgcc] = useState('')
@@ -125,7 +123,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   const [dismissedOverpayments, setDismissedOverpayments] = useState({})
   // Pre-save overpayment draft: set when handleAdd/handleEdit detects excess before submitting.
   // Shape: { source, period, enteredAmount, expectedAmount, originPaidBefore, originPaidAfter,
-  //          overpaymentAmount, formDate, formNote, paymentId, nextPeriod, nextPayment }
+  //          overpaymentAmount, formEntries, formNote, paymentId, nextPeriod, nextPayment }
   const [pendingOverpaymentDraft, setPendingOverpaymentDraft] = useState(null)
   const [isRentChangeSaving, setIsRentChangeSaving] = useState(false)
   const resolverAutoOpenActiveRef = useRef(false)
@@ -216,8 +214,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setFormPeriod('')
       setFormUseCustom(true)
       setFormCustomPeriod(targetPeriod ?? todayLocal().slice(0, 7))
-      setFormAmount(contract.current_rent != null ? formatAmountInput(contract.current_rent) : '')
-      setFormDate(todayLocal())
+      setFormEntries([{
+        amount: contract.current_rent != null ? formatAmountInput(contract.current_rent) : '',
+        paid_at: todayLocal(),
+        note: '',
+      }])
       setFormNote('')
       setFormError(null)
       setActiveForm('add')
@@ -229,10 +230,17 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setFormPeriod(targetPeriod)
       setFormUseCustom(p === null && targetPeriod !== nextVirtualPeriod)
       setFormCustomPeriod(p === null && targetPeriod !== nextVirtualPeriod ? targetPeriod : '')
-      setFormAmount(formatAmountInput(p ? getPrefillAmount(p) : contract.current_rent))
-      setFormDate(todayLocal())
-      setFormNote('')
       if (p) {
+        setFormEntries(
+          p.payment_entries?.length > 0
+            ? p.payment_entries.map(e => ({
+                amount: formatAmountInput(e.amount ?? 0),
+                paid_at: e.paid_at ?? todayLocal(),
+                note: e.note ?? '',
+              }))
+            : [{ amount: formatAmountInput(getPrefillAmount(p)), paid_at: p.paid_at ?? todayLocal(), note: '' }]
+        )
+        setFormNote(p.comment ?? '')
         setFormDeductions(
           (p.deductions ?? []).map(d => ({
             label: d.label,
@@ -242,6 +250,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
         )
         const existingGgcc = (p.owner_expenses ?? []).find(e => isGgccExpense(e))
         setFormGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
+      } else {
+        setFormEntries([{ amount: formatAmountInput(contract.current_rent), paid_at: todayLocal(), note: '' }])
+        setFormNote('')
       }
       setFormError(null)
       setActiveForm('add')
@@ -252,9 +263,16 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     setFormPeriod(period)
     setFormUseCustom(false)
     setFormCustomPeriod('')
-    setFormAmount(formatAmountInput(isVirtual ? contract.current_rent : getPrefillAmount(payment)))
-    setFormDate(todayLocal())
-    setFormNote('')
+    setFormEntries(
+      !isVirtual && payment && payment.payment_entries?.length > 0
+        ? payment.payment_entries.map(e => ({
+            amount: formatAmountInput(e.amount ?? 0),
+            paid_at: e.paid_at ?? todayLocal(),
+            note: e.note ?? '',
+          }))
+        : [{ amount: formatAmountInput(isVirtual ? contract.current_rent : getPrefillAmount(payment)), paid_at: todayLocal(), note: '' }]
+    )
+    setFormNote(!isVirtual && payment ? (payment.comment ?? '') : '')
     if (!isVirtual && payment) {
       setFormDeductions(
         (payment.deductions ?? []).map(d => ({
@@ -280,8 +298,16 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     setFormGgcc('')
     const p = payments.find(py => py.period === value)
     if (p) {
-      setFormAmount(formatAmountInput(getPrefillAmount(p)))
-      setFormDate(p.paid_at ?? todayLocal())
+      setFormEntries(
+        p.payment_entries?.length > 0
+          ? p.payment_entries.map(e => ({
+              amount: formatAmountInput(e.amount ?? 0),
+              paid_at: e.paid_at ?? todayLocal(),
+              note: e.note ?? '',
+            }))
+          : [{ amount: formatAmountInput(getPrefillAmount(p)), paid_at: p.paid_at ?? todayLocal(), note: '' }]
+      )
+      setFormNote(p.comment ?? '')
       setFormDeductions(
         (p.deductions ?? []).map(d => ({
           label: d.label,
@@ -293,15 +319,22 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setFormGgcc(existingGgcc ? formatAmountInput(String(existingGgcc.amount)) : '')
     } else {
       // Virtual period not yet created — default to expected monthly rent
-      setFormAmount(formatAmountInput(contract.current_rent))
-      setFormDate(todayLocal())
+      setFormEntries([{ amount: formatAmountInput(contract.current_rent), paid_at: todayLocal(), note: '' }])
+      setFormNote('')
     }
   }
 
   function openEdit(payment) {
     setEditPayment(payment)
-    setEditAmount(formatAmountInput(payment.paid_amount ?? payment.expected_amount))
-    setEditDate(payment.paid_at ?? todayLocal())
+    setEditEntries(
+      payment.payment_entries?.length > 0
+        ? payment.payment_entries.map(e => ({
+            amount: formatAmountInput(e.amount ?? 0),
+            paid_at: e.paid_at ?? todayLocal(),
+            note: e.note ?? '',
+          }))
+        : [{ amount: formatAmountInput(payment.paid_amount ?? payment.expected_amount), paid_at: payment.paid_at ?? todayLocal(), note: '' }]
+    )
     setEditNote(payment.comment ?? '')
     setEditDeductions(
       (payment.deductions ?? []).map(d => ({
@@ -335,7 +368,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     setFormError(null)
     setOverpaymentError(null)
     const period = formUseCustom ? formCustomPeriod : formPeriod
-    const amount = parseAmountInput(formAmount)
+    const validEntries = formEntries
+      .filter(e => e.amount !== '' && parseAmountInput(e.amount) > 0)
+      .map(e => ({ amount: parseAmountInput(e.amount), paid_at: e.paid_at || null, note: e.note || null }))
+    if (validEntries.length === 0) {
+      setFormError('Agrega al menos un abono con monto válido.')
+      setIsSubmitting(false)
+      return
+    }
+    const totalEntered = validEntries.reduce((s, e) => s + e.amount, 0)
     const existing = payments.find(p => p.period === period)
 
     // Validate deductions before the overpayment check so partial rows are caught
@@ -349,8 +390,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     const normalizedDeds = dedResult.deductions
 
     const expectedAmount = existing ? existing.expected_amount : (contract.current_rent ?? 0)
-    const alreadyPaid = existing ? (existing.paid_amount ?? 0) : 0
-    const originPaidAfter = alreadyPaid + amount
+    const originPaidAfter = totalEntered
     const overpaymentAmount = Math.max(0, originPaidAfter - expectedAmount)
     if (overpaymentAmount > 0) {
       const nextPeriod = addOneMonth(period)
@@ -358,12 +398,12 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setPendingOverpaymentDraft({
         source: 'add',
         period,
-        enteredAmount: amount,
+        enteredAmount: totalEntered,
         expectedAmount,
-        originPaidBefore: alreadyPaid,
+        originPaidBefore: 0,
         originPaidAfter,
         overpaymentAmount,
-        formDate,
+        formEntries: validEntries,
         formNote,
         formDeductions: normalizedDeds,
         formOwnerExpenses: mergeGgccOwnerExpense([], formGgcc),
@@ -380,8 +420,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            paid_amount: (existing.paid_amount ?? 0) + amount,
-            paid_at: formDate,
+            payment_entries: validEntries,
             comment: formNote !== '' ? formNote : null,
             deductions: normalizedDeds,
             owner_expenses: mergeGgccOwnerExpense(existing.owner_expenses, formGgcc),
@@ -394,8 +433,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             period,
-            paid_amount: amount || null,
-            paid_at: formDate || null,
+            payment_entries: validEntries,
             comment: formNote || null,
             deductions: normalizedDeds,
             owner_expenses: mergeGgccOwnerExpense([], formGgcc),
@@ -428,7 +466,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       setIsSubmitting(false)
       return
     }
-    const newTotal = parseAmountInput(editAmount)
+    const validEntries = editEntries
+      .filter(e => e.amount !== '' && parseAmountInput(e.amount) > 0)
+      .map(e => ({ amount: parseAmountInput(e.amount), paid_at: e.paid_at || null, note: e.note || null }))
+    if (validEntries.length === 0) {
+      setFormError('Agrega al menos un abono con monto válido.')
+      setIsSubmitting(false)
+      return
+    }
+    const newTotal = validEntries.reduce((s, e) => s + e.amount, 0)
     const originPaidBefore = editPayment.paid_amount ?? 0
     const expectedAmount = editPayment.expected_amount
     const overpaymentAmount = Math.max(0, newTotal - expectedAmount)
@@ -444,7 +490,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
         originPaidBefore,
         originPaidAfter: newTotal,
         overpaymentAmount,
-        formDate: editDate,
+        formEntries: validEntries,
         formNote: editNote,
         paymentId: editPayment.id,
         nextPeriod,
@@ -455,8 +501,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     }
     try {
       const body = {}
-      if (editAmount !== '') body.paid_amount = newTotal
-      if (editDate !== '') body.paid_at = editDate
+      if (validEntries.length > 0) body.payment_entries = validEntries
       body.comment = editNote !== '' ? editNote : null
       body.deductions = dedResult.deductions
       body.owner_expenses = mergeGgccOwnerExpense(editPayment.owner_expenses, editGgcc)
@@ -524,21 +569,20 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   // applyAfter=false: saves only, no transfer (Case C — next period fully paid).
   async function saveFromDraft(applyAfter) {
     if (!pendingOverpaymentDraft) return
-    const { period, paymentId, originPaidAfter, formDate, formNote, formDeductions: draftDeductions, formOwnerExpenses: draftOwnerExpenses } = pendingOverpaymentDraft
+    const { period, paymentId, originPaidAfter, formEntries: draftEntries, formNote, formDeductions: draftDeductions, formOwnerExpenses: draftOwnerExpenses } = pendingOverpaymentDraft
     setIsSubmitting(true)
     setFormError(null)
     setOverpaymentError(null)
     try {
       let resolvedId = paymentId
       if (paymentId != null) {
-        // PATCH: add-to-existing (originPaidAfter = alreadyPaid + entered)
-        //        or edit (originPaidAfter = entered, replaces rather than adds)
+        // PATCH: add-to-existing or edit — sends payment_entries to replace entries
+        //        originPaidAfter is stored in draft but not sent; backend derives total from entries
         const res = await fetch(`${API_BASE}/payments/${paymentId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            paid_amount: originPaidAfter,
-            ...(formDate ? { paid_at: formDate } : {}),
+            payment_entries: draftEntries,
             comment: formNote !== '' ? formNote : null,
           }),
         })
@@ -550,8 +594,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             period,
-            paid_amount: originPaidAfter || null,
-            paid_at: formDate || null,
+            payment_entries: draftEntries,
             comment: formNote || null,
             deductions: draftDeductions ?? [],
             owner_expenses: draftOwnerExpenses ?? [],
@@ -596,7 +639,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       period,
       paymentId,
       originPaidAfter,
-      formDate,
+      formEntries: draftEntries,
       formNote,
       formDeductions: draftDeductions,
       formOwnerExpenses: draftOwnerExpenses,
@@ -622,9 +665,10 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            paid_amount: originPaidAfter,
-            ...(formDate ? { paid_at: formDate } : {}),
-            comment: formNote !== '' ? formNote : null,
+            payment_entries: source === 'edit'
+              ? editEntries.filter(e => parseAmountInput(e.amount) > 0).map(e => ({ amount: parseAmountInput(e.amount), paid_at: e.paid_at || null, note: e.note || null }))
+              : draftEntries,
+            comment: source === 'edit' ? (editNote !== '' ? editNote : null) : (formNote !== '' ? formNote : null),
             deductions,
             owner_expenses,
             carry_forward_waived: true,
@@ -637,8 +681,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             period,
-            paid_amount: originPaidAfter || null,
-            paid_at: formDate || null,
+            payment_entries: draftEntries,
             comment: formNote || null,
             deductions,
             owner_expenses,
@@ -667,7 +710,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       period,
       enteredAmount,
       originPaidAfter,
-      formDate,
+      formEntries: draftEntries,
       formNote,
       formDeductions: draftDeductions,
       formOwnerExpenses: draftOwnerExpenses,
@@ -685,6 +728,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       owner_expenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
     }
 
+    const latestDate = draftEntries?.filter(e => e.paid_at).map(e => e.paid_at).sort().pop() ?? null
+
     const body = {
       period,
       new_rent_amount: enteredAmount,
@@ -694,7 +739,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       deductions,
       owner_expenses,
     }
-    if (formDate) body.paid_at = formDate
+    if (latestDate) body.paid_at = latestDate
 
     setIsRentChangeSaving(true)
     setFormError(null)
@@ -743,10 +788,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   const brokerEnabled = contract.broker_fee_enabled === true
   const usualBrokerFee = contract.usual_broker_fee ?? 0
 
-  const addPaidAmt = formAmount !== '' ? parseAmountInput(formAmount) : 0
+  const addPaidAmt = formEntries.reduce(
+    (sum, e) => sum + (e.amount !== '' ? parseAmountInput(e.amount) : 0), 0
+  )
   const addExpected = addFormExistingPayment?.expected_amount ?? contract.current_rent ?? 0
-  const addExistingPaid = addFormExistingPayment ? (addFormExistingPayment.paid_amount ?? 0) : 0
-  const addCumulativePaid = addExistingPaid + addPaidAmt
+  const addCumulativePaid = addPaidAmt
   const addBrokerDedAmt = (() => {
     const b = formDeductions.find(d => d.label === 'Corredora')
     return b && b.amount !== '' ? parseAmountInput(b.amount) : 0
@@ -756,7 +802,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   const addRecognized = addCumulativePaid + addTotalDeductions
   const addMissing = Math.max(0, addExpected - addRecognized)
 
-  const editPaidAmt = editAmount !== '' ? parseAmountInput(editAmount) : 0
+  const editPaidAmt = editEntries.reduce(
+    (sum, e) => sum + (e.amount !== '' ? parseAmountInput(e.amount) : 0), 0
+  )
   const editExpected = editPayment?.expected_amount ?? 0
   const editBrokerDedAmt = (() => {
     const b = editDeductions.find(d => d.label === 'Corredora')
@@ -971,6 +1019,60 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
             Editar monto
           </button>
         </div>
+      </div>
+    )
+  }
+
+  function renderEntryRows(entries, setEntries, disabled) {
+    return (
+      <div className="payment-entries-section">
+        <span className="deductions-section-label">Pagos recibidos</span>
+        {entries.map((entry, i) => (
+          <div key={i} className="deduction-row">
+            <input
+              className="payment-form-input deduction-input-amount"
+              type="text"
+              inputMode="numeric"
+              value={entry.amount}
+              onChange={e => setEntries(prev => prev.map((r, j) => j === i ? { ...r, amount: formatAmountInput(e.target.value) } : r))}
+              placeholder="Monto"
+              disabled={disabled}
+            />
+            <input
+              className="payment-form-input"
+              type="date"
+              value={entry.paid_at}
+              onChange={e => setEntries(prev => prev.map((r, j) => j === i ? { ...r, paid_at: e.target.value } : r))}
+              disabled={disabled}
+            />
+            <input
+              className="payment-form-input deduction-input-note"
+              type="text"
+              value={entry.note}
+              onChange={e => setEntries(prev => prev.map((r, j) => j === i ? { ...r, note: e.target.value } : r))}
+              placeholder="Nota (opcional)"
+              disabled={disabled}
+            />
+            {!disabled && entries.length > 1 && (
+              <button
+                type="button"
+                className="btn-link-secondary"
+                onClick={() => setEntries(prev => prev.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        ))}
+        {!disabled && (
+          <button
+            type="button"
+            className="btn-link-secondary"
+            onClick={() => setEntries(prev => [...prev, { amount: '', paid_at: todayLocal(), note: '' }])}
+          >
+            + Agregar abono
+          </button>
+        )}
       </div>
     )
   }
@@ -1229,32 +1331,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                         )}
                       </label>
                     )}
+                    {renderEntryRows(formEntries, setFormEntries, !!pendingOverpaymentDraft)}
                     <label className="payment-form-label">
-                      Arriendo cobrado / total ingresos
-                      <input
-                        className="payment-form-input"
-                        type="text"
-                        inputMode="numeric"
-                        value={formAmount}
-                        onChange={e => setFormAmount(formatAmountInput(e.target.value))}
-                        placeholder={`ej. ${formatAmountInput(contract.current_rent)}`}
-                        required
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                    </label>
-                    <label className="payment-form-label">
-                      Fecha pago
-                      <input
-                        className="payment-form-input"
-                        type="date"
-                        value={formDate}
-                        onChange={e => setFormDate(e.target.value)}
-                        required
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                    </label>
-                    <label className="payment-form-label">
-                      Nota
+                      Nota general
                       <input
                         className="payment-form-input"
                         type="text"
@@ -1397,29 +1476,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                         disabled
                       />
                     </label>
+                    {renderEntryRows(editEntries, setEditEntries, !!pendingOverpaymentDraft)}
                     <label className="payment-form-label">
-                      Arriendo cobrado / total ingresos
-                      <input
-                        className="payment-form-input"
-                        type="text"
-                        inputMode="numeric"
-                        value={editAmount}
-                        onChange={e => setEditAmount(formatAmountInput(e.target.value))}
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                    </label>
-                    <label className="payment-form-label">
-                      Fecha pago
-                      <input
-                        className="payment-form-input"
-                        type="date"
-                        value={editDate}
-                        onChange={e => setEditDate(e.target.value)}
-                        disabled={!!pendingOverpaymentDraft}
-                      />
-                    </label>
-                    <label className="payment-form-label">
-                      Nota
+                      Nota general
                       <input
                         className="payment-form-input"
                         type="text"

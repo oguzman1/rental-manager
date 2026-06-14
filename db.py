@@ -241,6 +241,25 @@ def init_db():
 
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS payment_entries (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+                amount     INTEGER NOT NULL CHECK(amount > 0),
+                paid_at    TEXT,
+                note       TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payment_entries_payment_id
+            ON payment_entries(payment_id)
+            """
+        )
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS owner_monthly_expenses (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 payment_id INTEGER NOT NULL REFERENCES payments(id),
@@ -470,6 +489,12 @@ def delete_managed_property(property_id: int) -> bool:
         contract_ids = [row[0] for row in contract_rows]
 
         for cid in contract_ids:
+            conn.execute(
+                "DELETE FROM payment_entries WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)",
+                (cid,),
+            )
+            conn.execute("DELETE FROM payment_deductions WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)", (cid,))
+            conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)", (cid,))
             conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM rent_changes WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM contract_tenants WHERE contract_id = ?", (cid,))
@@ -1741,6 +1766,56 @@ def _replace_owner_expenses(conn, payment_id: int, owner_expenses: list[dict]) -
     _insert_owner_expenses(conn, payment_id, owner_expenses)
 
 
+def _load_payment_entries(conn, payment_id: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, amount, paid_at, note
+        FROM payment_entries
+        WHERE payment_id = ?
+        ORDER BY id
+        """,
+        (payment_id,),
+    ).fetchall()
+    return [{"id": r[0], "amount": r[1], "paid_at": r[2], "note": r[3]} for r in rows]
+
+
+def _load_payment_entries_batch(conn, payment_ids: list[int]) -> dict[int, list[dict]]:
+    if not payment_ids:
+        return {}
+    placeholders = ",".join("?" * len(payment_ids))
+    rows = conn.execute(
+        f"""
+        SELECT payment_id, id, amount, paid_at, note
+        FROM payment_entries
+        WHERE payment_id IN ({placeholders})
+        ORDER BY payment_id, id
+        """,
+        payment_ids,
+    ).fetchall()
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        result.setdefault(r[0], []).append(
+            {"id": r[1], "amount": r[2], "paid_at": r[3], "note": r[4]}
+        )
+    return result
+
+
+def _insert_payment_entries(conn, payment_id: int, entries: list[dict]) -> None:
+    for e in entries:
+        conn.execute(
+            """
+            INSERT INTO payment_entries (payment_id, amount, paid_at, note)
+            VALUES (?, ?, ?, ?)
+            """,
+            (payment_id, e["amount"], e.get("paid_at") or None, e.get("note") or None),
+        )
+
+
+def _replace_payment_entries(conn, payment_id: int, entries: list[dict]) -> None:
+    conn.execute("DELETE FROM payment_entries WHERE payment_id = ?", (payment_id,))
+    _insert_payment_entries(conn, payment_id, entries)
+
+
 def insert_payment(
     contract_id: int,
     period: str,
@@ -1753,6 +1828,7 @@ def insert_payment(
     deductions: list[dict] | None = None,
     owner_expenses: list[dict] | None = None,
     carry_forward_waived: bool = False,
+    payment_entries: list[dict] | None = None,
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
@@ -1768,6 +1844,8 @@ def insert_payment(
             _insert_deductions(conn, payment_id, deductions)
         if owner_expenses:
             _insert_owner_expenses(conn, payment_id, owner_expenses)
+        if payment_entries:
+            _insert_payment_entries(conn, payment_id, payment_entries)
         conn.commit()
         return payment_id
 
@@ -1776,11 +1854,16 @@ def _payment_row_to_dict(
     row,
     deductions: list[dict] | None = None,
     owner_expenses: list[dict] | None = None,
+    payment_entries: list[dict] | None = None,
 ) -> dict:
     paid = row[5]
     expected = row[4]
     deductions = deductions or []
     owner_expenses = owner_expenses or []
+    payment_entries = payment_entries or []
+    # Legacy synthesis: if no real entries exist, synthesize one from paid_amount
+    if not payment_entries and paid is not None and paid > 0:
+        payment_entries = [{"id": None, "amount": paid, "paid_at": row[6], "note": row[9]}]
     total_deductions = sum(d["amount"] for d in deductions)
     total_owner_expenses = sum(e["amount"] for e in owner_expenses)
     # recognized_amount = paid_amount + Σ deductions (rent-recognizing credits)
@@ -1802,6 +1885,7 @@ def _payment_row_to_dict(
         "created_at": row[10],
         "deductions": deductions,
         "owner_expenses": owner_expenses,
+        "payment_entries": payment_entries,
         "recognized_amount": recognized,
         "overpayment": overpayment,
         "net_owner_amount": net_owner_amount,
@@ -1978,7 +2062,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
         if row is None:
             raise LookupError("Payment not found.")
 
-        current = _payment_row_to_dict(row, _load_deductions(conn, row[0]), _load_owner_expenses(conn, row[0]))
+        current = _payment_row_to_dict(row, _load_deductions(conn, row[0]), _load_owner_expenses(conn, row[0]), [])
         if current["overpayment"] <= 0:
             raise ValueError("No overpayment to apply.")
 
@@ -1990,6 +2074,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
             "UPDATE payments SET paid_amount = ?, status = 'paid' WHERE id = ?",
             (current["expected_amount"], payment_id),
         )
+        conn.execute("DELETE FROM payment_entries WHERE payment_id = ?", (payment_id,))
 
         # Compute next period string
         year = int(current["period"][:4])
@@ -2043,7 +2128,7 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
             )
             next_id = cursor.lastrowid
         else:
-            next_dict = _payment_row_to_dict(next_row, _load_deductions(conn, next_row[0]), _load_owner_expenses(conn, next_row[0]))
+            next_dict = _payment_row_to_dict(next_row, _load_deductions(conn, next_row[0]), _load_owner_expenses(conn, next_row[0]), [])
             next_id = next_dict["id"]
             expected_amount = next_dict["expected_amount"]
             current_paid = next_dict["paid_amount"] or 0
@@ -2066,8 +2151,8 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
 
         cur_row = conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
         nxt_row = conn.execute("SELECT * FROM payments WHERE id = ?", (next_id,)).fetchone()
-        updated_current = _payment_row_to_dict(cur_row, _load_deductions(conn, payment_id), _load_owner_expenses(conn, payment_id))
-        updated_next = _payment_row_to_dict(nxt_row, _load_deductions(conn, next_id), _load_owner_expenses(conn, next_id))
+        updated_current = _payment_row_to_dict(cur_row, _load_deductions(conn, payment_id), _load_owner_expenses(conn, payment_id), _load_payment_entries(conn, payment_id))
+        updated_next = _payment_row_to_dict(nxt_row, _load_deductions(conn, next_id), _load_owner_expenses(conn, next_id), _load_payment_entries(conn, next_id))
 
     return updated_current, updated_next
 
@@ -2146,9 +2231,15 @@ def list_payments_for_contract(contract_id: int) -> list[dict]:
         payment_ids = [r[0] for r in rows]
         deductions_map = _load_deductions_batch(conn, payment_ids)
         owner_expenses_map = _load_owner_expenses_batch(conn, payment_ids)
+        entries_map = _load_payment_entries_batch(conn, payment_ids)
 
     return [
-        _payment_row_to_dict(row, deductions_map.get(row[0], []), owner_expenses_map.get(row[0], []))
+        _payment_row_to_dict(
+            row,
+            deductions_map.get(row[0], []),
+            owner_expenses_map.get(row[0], []),
+            entries_map.get(row[0], []),
+        )
         for row in rows
     ]
 
@@ -2163,8 +2254,9 @@ def get_payment(payment_id: int) -> dict | None:
             return None
         deductions = _load_deductions(conn, payment_id)
         owner_expenses = _load_owner_expenses(conn, payment_id)
+        entries = _load_payment_entries(conn, payment_id)
 
-    return _payment_row_to_dict(row, deductions, owner_expenses)
+    return _payment_row_to_dict(row, deductions, owner_expenses, entries)
 
 
 def update_payment(
@@ -2177,6 +2269,7 @@ def update_payment(
     owner_expenses: list[dict] | None = None,
     expected_amount: int | None = None,
     carry_forward_waived: bool | None = None,
+    payment_entries: list[dict] | None = None,
 ) -> None:
     with get_connection() as conn:
         if expected_amount is not None:
@@ -2206,6 +2299,8 @@ def update_payment(
             _replace_deductions(conn, payment_id, deductions)
         if owner_expenses is not None:
             _replace_owner_expenses(conn, payment_id, owner_expenses)
+        if payment_entries is not None:
+            _replace_payment_entries(conn, payment_id, payment_entries)
         conn.commit()
 
 
@@ -2337,7 +2432,7 @@ def rent_change_payment_atomic(
 
     return {
         "rent_change_id": rent_change_id,
-        "payment": _payment_row_to_dict(row, deductions_out, owner_expenses_out),
+        "payment": _payment_row_to_dict(row, deductions_out, owner_expenses_out, []),
     }
 
 
@@ -2351,6 +2446,7 @@ def delete_payment(payment_id: int) -> bool:
     with get_connection() as conn:
         conn.execute("DELETE FROM payment_deductions WHERE payment_id = ?", (payment_id,))
         conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id = ?", (payment_id,))
+        conn.execute("DELETE FROM payment_entries WHERE payment_id = ?", (payment_id,))
         cursor = conn.execute(
             """
             UPDATE payments

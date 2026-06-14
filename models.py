@@ -311,6 +311,7 @@ class PaymentCreate(BaseModel):
     comment: str | None = None
     deductions: list[PaymentDeductionInput] = Field(default_factory=list)
     owner_expenses: list[OwnerExpenseInput] = Field(default_factory=list)
+    carry_forward_waived: bool = False
 
     @field_validator("period")
     @classmethod
@@ -327,6 +328,7 @@ class PaymentUpdate(BaseModel):
     deductions: list[PaymentDeductionInput] | None = None
     owner_expenses: list[OwnerExpenseInput] | None = None
     expected_amount: int | None = Field(default=None, gt=0)
+    carry_forward_waived: bool | None = None
 
 
 class RentChangePaymentCreate(BaseModel):
@@ -369,6 +371,7 @@ class PaymentResponse(BaseModel):
     recognized_amount: int = 0
     overpayment: int = 0
     net_owner_amount: int = 0
+    carry_forward_waived: bool = False
 
 
 class TenantCreate(BaseModel):

@@ -627,6 +627,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
             comment: formNote !== '' ? formNote : null,
             deductions,
             owner_expenses,
+            carry_forward_waived: true,
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -641,6 +642,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
             comment: formNote || null,
             deductions,
             owner_expenses,
+            carry_forward_waived: true,
           }),
         })
         if (!res.ok) throw new Error(`Error ${res.status}`)
@@ -944,7 +946,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
           )}
           <button
             type="button"
-            className="btn-warn-sm"
+            className="btn-secondary"
             onClick={saveCurrentPaymentOnly}
             disabled={isSubmitting || isRentChangeSaving}
           >
@@ -1084,7 +1086,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                             </button>
                           </td>
                         </tr>
-                        {p.overpayment > 0 && dismissedOverpayments[p.id] !== p.overpayment && (
+                        {p.overpayment > 0 && !p.carry_forward_waived && dismissedOverpayments[p.id] !== p.overpayment && (
                           <tr className="overpayment-row">
                             <td colSpan={8} className="overpayment-cell">
                               <span className="overpayment-label">

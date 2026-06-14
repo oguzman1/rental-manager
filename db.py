@@ -214,6 +214,7 @@ def init_db():
             ("brokerage_fee",   "INTEGER NOT NULL DEFAULT 0"),
             ("repair_discount", "INTEGER NOT NULL DEFAULT 0"),
             ("other_discount",  "INTEGER NOT NULL DEFAULT 0"),
+            ("carry_forward_waived", "INTEGER NOT NULL DEFAULT 0"),
         ]:
             if col not in payment_cols:
                 conn.execute(f"ALTER TABLE payments ADD COLUMN {col} {col_type}")
@@ -1751,15 +1752,16 @@ def insert_payment(
     status: str = "pending",
     deductions: list[dict] | None = None,
     owner_expenses: list[dict] | None = None,
+    carry_forward_waived: bool = False,
 ) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO payments
-                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment, carry_forward_waived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment),
+            (contract_id, period, due_date, expected_amount, paid_amount, paid_at, status, comment, int(carry_forward_waived)),
         )
         payment_id = cursor.lastrowid
         if deductions:
@@ -1803,6 +1805,7 @@ def _payment_row_to_dict(
         "recognized_amount": recognized,
         "overpayment": overpayment,
         "net_owner_amount": net_owner_amount,
+        "carry_forward_waived": bool(row[14]),
     }
 
 
@@ -2173,6 +2176,7 @@ def update_payment(
     deductions: list[dict] | None = None,
     owner_expenses: list[dict] | None = None,
     expected_amount: int | None = None,
+    carry_forward_waived: bool | None = None,
 ) -> None:
     with get_connection() as conn:
         if expected_amount is not None:
@@ -2192,6 +2196,11 @@ def update_payment(
                 WHERE id = ?
                 """,
                 (paid_amount, paid_at, status, comment, payment_id),
+            )
+        if carry_forward_waived is not None:
+            conn.execute(
+                "UPDATE payments SET carry_forward_waived = ? WHERE id = ?",
+                (int(carry_forward_waived), payment_id),
             )
         if deductions is not None:
             _replace_deductions(conn, payment_id, deductions)

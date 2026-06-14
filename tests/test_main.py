@@ -4840,3 +4840,249 @@ def test_dashboard_multi_alert_partial_prev_and_pending_current():
     assert item["current_payment_period"] == current_period
     assert item["current_payment_status"] == "pending"
     assert item["current_payment_amount"] == current_row["expected_amount"]
+
+
+# ──────────────────────────────────────────────
+# payment_entries feature tests
+# ──────────────────────────────────────────────
+
+_entries_contract_counter = 0
+
+
+def _create_entries_test_contract():
+    """Create a disposable managed property+contract for payment_entries tests.
+    Returns contract_id. current_rent = 800000.
+    """
+    global _entries_contract_counter
+    _entries_contract_counter += 1
+    rol = f"99999-ENTRIES-{_entries_contract_counter}"
+    payload = {
+        "property": {
+            "comuna": "TEST",
+            "rol": rol,
+            "address": "ENTRIES TEST ADDR",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "1",
+            "property_number": "1",
+            "year": 2024,
+            "fiscal_appraisal": 1000000,
+        },
+        "rental": {
+            "tenant_name": "Entries Test Tenant",
+            "payment_day": 5,
+            "property_label": "entries-test-prop",
+            "current_rent": 800000,
+            "adjustment_frequency": "annual",
+            "start_date": "2024-01-01",
+            "notice_days": 30,
+            "adjustment_month": "march",
+        },
+    }
+    r = client.post("/managed-property", json=payload)
+    assert r.status_code == 200, r.text
+    return _get_contract_id_for_rol(rol)
+
+
+def test_create_payment_with_two_entries_returns_both():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-01",
+            "payment_entries": [
+                {"amount": 600000, "paid_at": "2030-01-16", "note": "Primer abono"},
+                {"amount": 200000, "paid_at": "2030-01-30", "note": "Segundo abono"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["paid_amount"] == 800000
+    assert body["paid_at"] == "2030-01-30"
+    entries = body["payment_entries"]
+    assert len(entries) == 2
+    assert entries[0]["amount"] == 600000
+    assert entries[0]["paid_at"] == "2030-01-16"
+    assert entries[0]["note"] == "Primer abono"
+    assert entries[1]["amount"] == 200000
+    assert entries[1]["paid_at"] == "2030-01-30"
+    assert entries[1]["note"] == "Segundo abono"
+
+
+def test_create_payment_entries_sum_is_paid_amount():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-02",
+            "payment_entries": [
+                {"amount": 500000, "paid_at": "2030-02-10"},
+                {"amount": 300000, "paid_at": "2030-02-20"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["paid_amount"] == 800000
+    assert body["paid_at"] == "2030-02-20"
+
+
+def test_update_payment_entries_replaces_not_duplicates():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-03",
+            "payment_entries": [{"amount": 600000, "paid_at": "2030-03-10"}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+
+    r2 = client.patch(
+        f"/payments/{pid}",
+        json={
+            "payment_entries": [
+                {"amount": 400000, "paid_at": "2030-03-05"},
+                {"amount": 400000, "paid_at": "2030-03-20"},
+            ],
+        },
+    )
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert body["paid_amount"] == 800000
+    assert body["paid_at"] == "2030-03-20"
+    assert len(body["payment_entries"]) == 2
+
+
+def test_legacy_payment_synthesizes_one_entry():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2030-04", "paid_amount": 700000, "paid_at": "2030-04-15", "comment": "legacy note"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    entries = body["payment_entries"]
+    assert len(entries) == 1
+    assert entries[0]["amount"] == 700000
+    assert entries[0]["paid_at"] == "2030-04-15"
+    assert entries[0]["note"] == "legacy note"
+    assert entries[0]["id"] is None
+
+
+def test_partial_status_when_entries_sum_below_expected():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-05",
+            "payment_entries": [{"amount": 400000, "paid_at": "2030-05-10"}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "partial"
+    assert body["paid_amount"] == 400000
+
+
+def test_paid_status_when_entries_sum_equals_expected():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-06",
+            "payment_entries": [
+                {"amount": 600000, "paid_at": "2030-06-05"},
+                {"amount": 200000, "paid_at": "2030-06-25"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "paid"
+
+
+def test_carry_forward_waived_preserved_with_entries():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-07",
+            "payment_entries": [{"amount": 850000, "paid_at": "2030-07-10"}],
+            "carry_forward_waived": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["carry_forward_waived"] is True
+    assert body["paid_amount"] == 850000
+
+
+def test_list_payments_returns_payment_entries():
+    cid = _create_entries_test_contract()
+    client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-08",
+            "payment_entries": [
+                {"amount": 300000, "paid_at": "2030-08-10"},
+                {"amount": 500000, "paid_at": "2030-08-20"},
+            ],
+        },
+    )
+    r = client.get(f"/contracts/{cid}/payments")
+    assert r.status_code == 200, r.text
+    payments = r.json()
+    p = next((x for x in payments if x["period"] == "2030-08"), None)
+    assert p is not None
+    assert len(p["payment_entries"]) == 2
+    assert p["paid_amount"] == 800000
+
+
+def test_apply_overpayment_uses_total_paid_amount():
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-09",
+            "payment_entries": [
+                {"amount": 600000, "paid_at": "2030-09-10"},
+                {"amount": 300000, "paid_at": "2030-09-20"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["overpayment"] == 100000
+    pid = body["id"]
+
+    r2 = client.post(f"/payments/{pid}/apply-overpayment")
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["current"]["paid_amount"] == 800000
+    assert body2["current"]["overpayment"] == 0
+    assert body2["next"]["paid_amount"] == 100000
+
+
+def test_patch_without_entries_does_not_clear_existing_entries():
+    """Patching paid_amount directly should not remove existing entries."""
+    cid = _create_entries_test_contract()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={
+            "period": "2030-10",
+            "payment_entries": [
+                {"amount": 600000, "paid_at": "2030-10-10"},
+                {"amount": 200000, "paid_at": "2030-10-20"},
+            ],
+        },
+    )
+    pid = r.json()["id"]
+    # Patch with comment only — no payment_entries in body
+    r2 = client.patch(f"/payments/{pid}", json={"comment": "general note"})
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    # Entries should be unchanged
+    assert len(body["payment_entries"]) == 2
+    assert body["paid_amount"] == 800000

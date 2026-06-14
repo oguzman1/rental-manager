@@ -5240,3 +5240,166 @@ def test_horizon_idempotent_no_duplicate_periods():
     periods2 = sorted(p["period"] for p in r2)
     assert periods1 == periods2, "Second GET must not add or remove periods"
     assert len(periods1) == len(set(periods1)), "No duplicate periods"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task 3 — _cleanup_excessive_future_periods
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _insert_raw_payment(contract_id: int, period: str, **kwargs) -> int:
+    """Insert a payment row directly into the test DB. Returns the row id."""
+    from calendar import monthrange as _mr
+
+    conn = _sqlite3.connect("test_rental_manager.db")
+    y, m = int(period[:4]), int(period[5:7])
+    due_date = f"{period}-{min(5, _mr(y, m)[1]):02d}"
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO payments
+            (contract_id, period, due_date, expected_amount, paid_amount, status,
+             comment, brokerage_fee, repair_discount, other_discount,
+             carry_forward_waived, source)
+        VALUES (?, ?, ?, 600000, ?, ?, ?, ?, ?, ?, ?, 'manual')
+        """,
+        (
+            contract_id, period, due_date,
+            kwargs.get("paid_amount"),
+            kwargs.get("status", "pending"),
+            kwargs.get("comment"),
+            kwargs.get("brokerage_fee", 0),
+            kwargs.get("repair_discount", 0),
+            kwargs.get("other_discount", 0),
+            kwargs.get("carry_forward_waived", 0),
+        ),
+    )
+    pid = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def _add_payment_entry(payment_id: int, amount: int = 100000) -> None:
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute(
+        "INSERT INTO payment_entries (payment_id, amount) VALUES (?, ?)",
+        (payment_id, amount),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _add_payment_deduction(payment_id: int, amount: int = 50000) -> None:
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute(
+        "INSERT INTO payment_deductions (payment_id, label, amount) VALUES (?, 'test', ?)",
+        (payment_id, amount),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _add_owner_expense(payment_id: int, amount: int = 30000) -> None:
+    conn = _sqlite3.connect("test_rental_manager.db")
+    conn.execute(
+        "INSERT INTO owner_monthly_expenses (payment_id, label, amount) VALUES (?, 'test', ?)",
+        (payment_id, amount),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_horizon_cleanup_removes_empty_future_period_beyond_horizon():
+    """A completely empty pending period beyond the horizon is deleted by cleanup."""
+    cid = _create_horizon_contract("002")
+    _insert_raw_payment(cid, "2095-01")
+
+    assert "2095-01" in _get_db_periods(cid)
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-01" not in _get_db_periods(cid), "Empty future period must be cleaned up"
+
+
+def test_horizon_cleanup_preserves_period_with_paid_amount():
+    """A future period beyond the horizon with paid_amount is protected."""
+    cid = _create_horizon_contract("003")
+    _insert_raw_payment(cid, "2095-02", paid_amount=600000, status="paid")
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-02" in _get_db_periods(cid), "Period with paid_amount must be preserved"
+
+
+def test_horizon_cleanup_preserves_period_with_payment_entries():
+    """A future period beyond the horizon with payment_entries is protected."""
+    cid = _create_horizon_contract("004")
+    pid = _insert_raw_payment(cid, "2095-03")
+    _add_payment_entry(pid)
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-03" in _get_db_periods(cid), "Period with payment_entries must be preserved"
+
+
+def test_horizon_cleanup_preserves_period_with_payment_deductions():
+    """A future period beyond the horizon with payment_deductions is protected."""
+    cid = _create_horizon_contract("005")
+    pid = _insert_raw_payment(cid, "2095-04")
+    _add_payment_deduction(pid)
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-04" in _get_db_periods(cid), "Period with payment_deductions must be preserved"
+
+
+def test_horizon_cleanup_preserves_period_with_owner_expenses():
+    """A future period beyond the horizon with owner_monthly_expenses is protected."""
+    cid = _create_horizon_contract("006")
+    pid = _insert_raw_payment(cid, "2095-05")
+    _add_owner_expense(pid)
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-05" in _get_db_periods(cid), "Period with owner_monthly_expenses must be preserved"
+
+
+def test_horizon_cleanup_preserves_period_with_carry_forward_waived():
+    """A future period beyond the horizon with carry_forward_waived=1 is protected."""
+    cid = _create_horizon_contract("007")
+    _insert_raw_payment(cid, "2095-06", carry_forward_waived=1)
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-06" in _get_db_periods(cid), "Period with carry_forward_waived must be preserved"
+
+
+def test_horizon_cleanup_preserves_period_with_comment():
+    """A future period beyond the horizon with a comment is protected."""
+    cid = _create_horizon_contract("008")
+    _insert_raw_payment(cid, "2095-07", comment="nota de prueba")
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+    assert "2095-07" in _get_db_periods(cid), "Period with comment must be preserved"
+
+
+def test_horizon_historical_periods_not_deleted():
+    """Historical periods before today are never removed by cleanup."""
+    cid = _create_horizon_contract("009", start_date="2020-01-01")
+    historical = _get_db_periods(cid)
+    hist_only = {p for p in historical if p < _today_ym()}
+
+    _db._cleanup_excessive_future_periods(cid, _expected_horizon_ym())
+
+    after = _get_db_periods(cid)
+    for p in hist_only:
+        assert p in after, f"Historical period {p} must not be deleted"
+
+
+def test_horizon_inactive_contract_no_new_future_periods():
+    """Closed contracts do not receive new future periods from _ensure."""
+    cid = _create_horizon_contract("010")
+    before = _get_db_periods(cid)
+
+    r = client.patch(f"/contracts/{cid}/close", json={"end_date": "2026-01-31"})
+    assert r.status_code == 200, f"Close failed: {r.status_code} {r.text}"
+
+    client.get(f"/contracts/{cid}/payments")
+    after = _get_db_periods(cid)
+
+    today_ym = _today_ym()
+    new_future = {p for p in after - before if p >= today_ym}
+    assert new_future == set(), f"Inactive contract must not get new future periods: {new_future}"

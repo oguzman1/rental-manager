@@ -2248,6 +2248,59 @@ def _ensure_payment_periods(contract_id: int, today: date | None = None) -> int:
     return inserted
 
 
+def _cleanup_excessive_future_periods(contract_id: int, horizon_ym: str) -> int:
+    """Delete empty pending periods beyond the generation horizon.
+
+    A period is eligible for deletion only when ALL hold:
+    - period > horizon_ym
+    - status = 'pending'
+    - paid_amount is NULL or 0, comment is NULL or empty
+    - brokerage_fee = 0, repair_discount = 0, other_discount = 0
+    - carry_forward_waived = 0
+    - no payment_entries, payment_deductions, or owner_monthly_expenses
+
+    Returns the number of rows deleted.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id
+            FROM payments p
+            WHERE p.contract_id = ?
+              AND p.period > ?
+              AND p.status = 'pending'
+              AND (p.paid_amount IS NULL OR p.paid_amount = 0)
+              AND (p.comment IS NULL OR p.comment = '')
+              AND p.brokerage_fee = 0
+              AND p.repair_discount = 0
+              AND p.other_discount = 0
+              AND p.carry_forward_waived = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_entries pe WHERE pe.payment_id = p.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_deductions pd WHERE pd.payment_id = p.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM owner_monthly_expenses ome WHERE ome.payment_id = p.id
+              )
+            """,
+            (contract_id, horizon_ym),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        ids = [r[0] for r in rows]
+        conn.execute(
+            f"DELETE FROM payments WHERE id IN ({','.join('?' * len(ids))})",
+            ids,
+        )
+        conn.commit()
+
+    return len(ids)
+
+
 def list_payments_for_contract(contract_id: int) -> list[dict]:
     _ensure_payment_periods(contract_id)
     with get_connection() as conn:

@@ -443,8 +443,8 @@ def get_rent_adjustments(
         description="Reference date to evaluate adjustment notices",
     )
 ):
-    rentals = list_rentals_for_adjustments()
     today = as_of if isinstance(as_of, date) else date.today()
+    rentals = list_rentals_for_adjustments(today)
     results = []
 
     for rental in rentals:

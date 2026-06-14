@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -1009,3 +1010,275 @@ def test_legacy_migration_is_idempotent():
         ).fetchone()[0]
 
     assert count == 1
+
+
+# --- Payment audit data model -------------------------------------------------
+
+
+def _insert_test_tenant(display_name: str = "Test Tenant") -> int:
+    with db.get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO tenants (display_name) VALUES (?)", (display_name,)
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def _make_bank_statement_data(**overrides) -> dict:
+    data = {
+        "bank": "banco_de_chile",
+        "original_filename": "cartola_junio_2026.pdf",
+        "stored_path": "uploads/cartolas/1_abc12345.pdf",
+        "mime_type": "application/pdf",
+        "size_bytes": 12345,
+        "file_hash": "hash-1",
+        "period_label": "2026-06",
+    }
+    data.update(overrides)
+    return data
+
+
+def _make_bank_movement_data(statement_id: int, **overrides) -> dict:
+    data = {
+        "statement_id": statement_id,
+        "movement_date": "2026-06-05",
+        "description": "TRANSFERENCIA DE NICOLAS DELGADO",
+        "amount": 801875,
+        "balance_after": 5000000,
+        "dedup_key": "movement-1",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_init_db_runs_twice_without_error():
+    db.init_db()
+    db.init_db()
+
+
+def test_bank_statement_insert_get_list():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+
+    fetched = db.get_bank_statement(sid)
+    assert fetched["id"] == sid
+    assert fetched["original_filename"] == "cartola_junio_2026.pdf"
+    assert fetched["status"] == "uploaded"
+    assert fetched["movements_count"] == 0
+    assert fetched["bank"] == "banco_de_chile"
+
+    by_hash = db.get_bank_statement_by_file_hash("hash-1")
+    assert by_hash["id"] == sid
+
+    listed = db.list_bank_statements()
+    assert len(listed) == 1
+    assert listed[0]["id"] == sid
+
+    db.update_bank_statement_parse_result(
+        sid, status="parsed", movements_count=3, parsed_at="2026-06-14T00:00:00"
+    )
+    fetched = db.get_bank_statement(sid)
+    assert fetched["status"] == "parsed"
+    assert fetched["movements_count"] == 3
+    assert fetched["parsed_at"] == "2026-06-14T00:00:00"
+    assert fetched["parse_error"] is None
+
+
+def test_bank_statement_duplicate_file_hash_rejected():
+    db.insert_bank_statement(_make_bank_statement_data(file_hash="dup-hash"))
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_bank_statement(
+            _make_bank_statement_data(original_filename="otro.pdf", file_hash="dup-hash")
+        )
+
+
+def test_bank_movement_insert_get_list():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    mid = db.insert_bank_movement(_make_bank_movement_data(sid))
+
+    fetched = db.get_bank_movement(mid)
+    assert fetched["id"] == mid
+    assert fetched["statement_id"] == sid
+    assert fetched["amount"] == 801875
+    assert fetched["matched_payment_id"] is None
+
+    listed = db.list_bank_movements()
+    assert len(listed) == 1
+
+    listed_for_statement = db.list_bank_movements(statement_id=sid)
+    assert len(listed_for_statement) == 1
+    assert listed_for_statement[0]["id"] == mid
+
+    other_sid = db.insert_bank_statement(_make_bank_statement_data(file_hash="hash-2"))
+    assert db.list_bank_movements(statement_id=other_sid) == []
+
+
+def test_bank_movement_duplicate_dedup_key_rejected():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    db.insert_bank_movement(_make_bank_movement_data(sid, dedup_key="dup-movement"))
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_bank_movement(
+            _make_bank_movement_data(
+                sid, movement_date="2026-06-06", dedup_key="dup-movement"
+            )
+        )
+
+
+def test_deleting_bank_statement_does_not_cascade_movements_without_fk_pragma():
+    """bank_movements.statement_id declares ON DELETE CASCADE, but get_connection()
+    never runs `PRAGMA foreign_keys = ON`, so SQLite does not enforce foreign keys
+    or cascades on this connection. Deleting a bank_statements row therefore leaves
+    its bank_movements rows in place. This is documented, expected behavior for
+    this PR; enabling FK enforcement globally is out of scope here."""
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    mid = db.insert_bank_movement(_make_bank_movement_data(sid))
+
+    with db.get_connection() as conn:
+        fk_enabled = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+        conn.execute("DELETE FROM bank_statements WHERE id = ?", (sid,))
+        conn.commit()
+
+    assert fk_enabled == 0
+    assert db.get_bank_statement(sid) is None
+    assert db.get_bank_movement(mid) is not None
+
+
+def test_payer_alias_insert_list_delete():
+    tenant_id = _insert_test_tenant("Nicolás Delgado")
+
+    aid = db.insert_payer_alias(
+        {"tenant_id": tenant_id, "alias": "N Delgado", "alias_normalized": "N DELGADO"}
+    )
+
+    listed = db.list_payer_aliases(tenant_id=tenant_id)
+    assert len(listed) == 1
+    assert listed[0]["id"] == aid
+    assert listed[0]["alias"] == "N Delgado"
+    assert listed[0]["alias_normalized"] == "N DELGADO"
+
+    assert db.list_payer_aliases() == listed
+
+    other_tenant_id = _insert_test_tenant("Otro Arrendatario")
+    assert db.list_payer_aliases(tenant_id=other_tenant_id) == []
+
+    assert db.delete_payer_alias(aid) is True
+    assert db.list_payer_aliases(tenant_id=tenant_id) == []
+    assert db.delete_payer_alias(aid) is False
+
+
+def test_payer_alias_duplicate_rejected():
+    tenant_id = _insert_test_tenant("Nicolás Delgado")
+    db.insert_payer_alias(
+        {"tenant_id": tenant_id, "alias": "N Delgado", "alias_normalized": "N DELGADO"}
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_payer_alias(
+            {"tenant_id": tenant_id, "alias": "N. Delgado", "alias_normalized": "N DELGADO"}
+        )
+
+
+def test_payment_audit_finding_insert_get_list():
+    cid = _get_any_contract_id()
+
+    fid = db.insert_payment_audit_finding(
+        {
+            "finding_type": "missing_payment",
+            "contract_id": cid,
+            "period": "2026-04",
+            "expected_amount": 801875,
+        }
+    )
+
+    fetched = db.get_payment_audit_finding(fid)
+    assert fetched["id"] == fid
+    assert fetched["finding_type"] == "missing_payment"
+    assert fetched["contract_id"] == cid
+    assert fetched["period"] == "2026-04"
+    assert fetched["expected_amount"] == 801875
+    assert fetched["status"] == "open"
+    assert fetched["confidence"] == "medium"
+
+    listed = db.list_payment_audit_findings()
+    assert any(f["id"] == fid for f in listed)
+
+    by_status = db.list_payment_audit_findings(status="open")
+    assert any(f["id"] == fid for f in by_status)
+    assert db.list_payment_audit_findings(status="resolved") == []
+
+    by_type = db.list_payment_audit_findings(finding_type="missing_payment")
+    assert any(f["id"] == fid for f in by_type)
+    assert db.list_payment_audit_findings(finding_type="amount_mismatch") == []
+
+
+def test_partial_unique_index_blocks_duplicate_open_contract_period_finding():
+    cid = _get_any_contract_id()
+
+    db.insert_payment_audit_finding(
+        {"finding_type": "missing_payment", "contract_id": cid, "period": "2026-04"}
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_payment_audit_finding(
+            {"finding_type": "missing_payment", "contract_id": cid, "period": "2026-04"}
+        )
+
+
+def test_partial_unique_index_allows_new_finding_after_resolution():
+    cid = _get_any_contract_id()
+
+    fid = db.insert_payment_audit_finding(
+        {"finding_type": "missing_payment", "contract_id": cid, "period": "2026-04"}
+    )
+
+    assert db.mark_payment_audit_finding_resolved(fid, "resolved", "abono encontrado") is True
+
+    resolved = db.get_payment_audit_finding(fid)
+    assert resolved["status"] == "resolved"
+    assert resolved["resolution_note"] == "abono encontrado"
+    assert resolved["resolved_at"] is not None
+
+    new_fid = db.insert_payment_audit_finding(
+        {"finding_type": "missing_payment", "contract_id": cid, "period": "2026-04"}
+    )
+    assert new_fid != fid
+
+    assert db.mark_payment_audit_finding_resolved(999999, "resolved") is False
+
+
+def test_partial_unique_index_blocks_duplicate_open_movement_finding():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    mid = db.insert_bank_movement(_make_bank_movement_data(sid))
+
+    db.insert_payment_audit_finding(
+        {"finding_type": "unmatched_movement", "bank_movement_id": mid}
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_payment_audit_finding(
+            {"finding_type": "unmatched_movement", "bank_movement_id": mid}
+        )
+
+
+def test_payment_audit_helpers_do_not_touch_payments_or_payment_entries():
+    """None of the new payment-audit helpers write to payments/payment_entries."""
+    cid = _get_any_contract_id()
+    before_payments = _get_payments(cid)
+    with db.get_connection() as conn:
+        before_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    mid = db.insert_bank_movement(_make_bank_movement_data(sid))
+    db.update_bank_statement_parse_result(sid, status="parsed", movements_count=1)
+    tenant_id = _insert_test_tenant("Audit Tenant")
+    aid = db.insert_payer_alias(
+        {"tenant_id": tenant_id, "alias": "Audit", "alias_normalized": "AUDIT"}
+    )
+    fid = db.insert_payment_audit_finding(
+        {"finding_type": "unmatched_movement", "bank_movement_id": mid}
+    )
+    db.mark_payment_audit_finding_resolved(fid, "dismissed", "no aplica")
+    db.delete_payer_alias(aid)
+
+    after_payments = _get_payments(cid)
+    with db.get_connection() as conn:
+        after_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    assert after_payments == before_payments
+    assert after_entries == before_entries

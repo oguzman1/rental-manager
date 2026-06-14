@@ -595,16 +595,15 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                   )
                                 )}
                                 <button
-                                  className="btn-contract-close"
+                                  className="btn-icon-danger"
                                   title="Cerrar contrato"
                                   aria-label="Cerrar contrato"
                                   onClick={() => handleClose(item)}
                                 >
-                                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <rect x="2" y="5" width="8" height="6" rx="1"/>
-                                    <path d="M4 5V4a2 2 0 0 1 4 0v1"/>
+                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                    <line x1="3" y1="3" x2="11" y2="11"/>
+                                    <line x1="11" y1="3" x2="3" y2="11"/>
                                   </svg>
-                                  Cerrar contrato
                                 </button>
                               </div>
                             </td>

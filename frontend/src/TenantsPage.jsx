@@ -252,7 +252,7 @@ function TenantsPage({ onPropertySelect, onDataMutation }) {
             )}
             {!isLoading && !error && items.length > 0 && (
               <div className="table-scroll">
-                <div className="table-wrapper">
+                <div className="table-wrapper fluid-table-wrapper">
                   <table className="dashboard-table">
                     <thead>
                       <tr>
@@ -309,7 +309,7 @@ function TenantsPage({ onPropertySelect, onDataMutation }) {
                           <td className="td td-center td-mono">
                             {item.payment_day ?? <span className="text-muted">—</span>}
                           </td>
-                          <td className="td" onClick={(e) => e.stopPropagation()}>
+                          <td className="td td-actions-wrap" onClick={(e) => e.stopPropagation()}>
                             <button
                               className="btn-payments"
                               onClick={() => openEdit(item.id)}

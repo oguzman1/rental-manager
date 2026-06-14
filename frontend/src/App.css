@@ -334,6 +334,13 @@
   min-width: max-content;
 }
 
+/* Allow the table to shrink to the available width instead of forcing a
+   scrollbar, used on tables whose actions column can wrap (see td-actions-wrap) */
+.fluid-table-wrapper {
+  min-width: 0;
+  overflow: visible;
+}
+
 .dashboard-table {
   width: 100%;
   border-collapse: collapse;
@@ -375,6 +382,18 @@
 .td-muted { color: var(--ink-3); }
 .td-right { text-align: right; }
 .td-center { text-align: center; }
+
+/* Actions column: wrap buttons instead of forcing the table wider than the viewport */
+.td-actions-wrap {
+  white-space: normal;
+}
+
+.td-actions-wrap .btn-payments,
+.td-actions-wrap .btn-payments-danger,
+.td-actions-wrap a.btn-payments {
+  display: inline-flex;
+  margin: 2px 4px 2px 0;
+}
 
 .table-row { cursor: pointer; }
 

@@ -587,6 +587,75 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     }
   }
 
+  // Saves the current payment as entered (amount, date, note, deductions, owner expenses),
+  // without applying the excess to the next period and without registering a rent change.
+  async function saveCurrentPaymentOnly() {
+    if (!pendingOverpaymentDraft) return
+    const {
+      source,
+      period,
+      paymentId,
+      originPaidAfter,
+      formDate,
+      formNote,
+      formDeductions: draftDeductions,
+      formOwnerExpenses: draftOwnerExpenses,
+    } = pendingOverpaymentDraft
+
+    let deductions = []
+    let owner_expenses = []
+    if (source === 'edit') {
+      const dedResult = normalizeDeductions(editDeductions)
+      if (dedResult.ok) deductions = dedResult.deductions
+      owner_expenses = mergeGgccOwnerExpense(editPayment?.owner_expenses, editGgcc)
+    } else {
+      deductions = draftDeductions ?? []
+      owner_expenses = draftOwnerExpenses ?? []
+    }
+
+    setIsSubmitting(true)
+    setFormError(null)
+    setOverpaymentError(null)
+    try {
+      if (paymentId != null) {
+        const res = await fetch(`${API_BASE}/payments/${paymentId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            paid_amount: originPaidAfter,
+            ...(formDate ? { paid_at: formDate } : {}),
+            comment: formNote !== '' ? formNote : null,
+            deductions,
+            owner_expenses,
+          }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+      } else {
+        const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            period,
+            paid_amount: originPaidAfter || null,
+            paid_at: formDate || null,
+            comment: formNote || null,
+            deductions,
+            owner_expenses,
+          }),
+        })
+        if (!res.ok) throw new Error(`Error ${res.status}`)
+      }
+      setPendingOverpaymentDraft(null)
+      setActiveForm(null)
+      await loadPayments()
+      await onPaymentMutation?.()
+    } catch (err) {
+      setFormError(err.message)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   // Registers the entered amount as a new rent and saves the payment at the new expected amount.
   // Uses the atomic backend endpoint so rent_change and payment are committed in one transaction.
   async function saveAsRentChange() {
@@ -859,6 +928,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
             ? `Actualizaría el arriendo a ${formatCLP(enteredAmount)} desde ${formatPeriodLabel(period)}.`
             : `No se puede registrar un reajuste desde ${formatPeriodLabel(period)} porque ya existe un reajuste posterior.`}
         </p>
+        <p className="payment-overpayment-confirm-text">
+          Registra el pago en este período sin abonar la diferencia al mes siguiente.
+        </p>
         <div className="payment-form-actions">
           {!nextBlocked && (
             <button
@@ -870,16 +942,14 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               {isSubmitting ? 'Guardando…' : 'Pasar diferencia al siguiente mes'}
             </button>
           )}
-          {nextBlocked && (
-            <button
-              type="button"
-              className="btn-warn-sm"
-              onClick={() => saveFromDraft(false)}
-              disabled={isSubmitting || isRentChangeSaving}
-            >
-              {isSubmitting ? 'Guardando…' : 'Guardar sin abonar excedente'}
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn-warn-sm"
+            onClick={saveCurrentPaymentOnly}
+            disabled={isSubmitting || isRentChangeSaving}
+          >
+            {isSubmitting ? 'Guardando…' : 'Guardar solo este pago'}
+          </button>
           {rentChangeAllowed && (
             <button
               type="button"

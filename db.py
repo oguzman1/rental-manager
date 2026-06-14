@@ -312,6 +312,123 @@ def init_db():
                 "UPDATE payments SET brokerage_fee = 0, repair_discount = 0, other_discount = 0"
             )
 
+        # --- Payment audit data model (bank statements, movements, aliases, findings) ---
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bank_statements (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                bank              TEXT    NOT NULL DEFAULT 'banco_de_chile',
+                original_filename TEXT    NOT NULL,
+                stored_path       TEXT    NOT NULL,
+                mime_type         TEXT    NOT NULL,
+                size_bytes        INTEGER NOT NULL,
+                file_hash         TEXT    NOT NULL UNIQUE,
+                period_label      TEXT,
+                status            TEXT    NOT NULL DEFAULT 'uploaded'
+                                    CHECK(status IN ('uploaded', 'parsed', 'error')),
+                parse_error       TEXT,
+                movements_count   INTEGER NOT NULL DEFAULT 0,
+                uploaded_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                parsed_at         TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bank_movements (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                statement_id       INTEGER NOT NULL REFERENCES bank_statements(id) ON DELETE CASCADE,
+                movement_date      TEXT    NOT NULL,
+                description        TEXT    NOT NULL,
+                amount             INTEGER NOT NULL,
+                balance_after      INTEGER,
+                dedup_key          TEXT    NOT NULL UNIQUE,
+                matched_payment_id INTEGER REFERENCES payments(id),
+                created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bank_movements_statement_id
+            ON bank_movements(statement_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bank_movements_date
+            ON bank_movements(movement_date)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bank_movements_amount
+            ON bank_movements(amount)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payer_aliases (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id        INTEGER NOT NULL REFERENCES tenants(id),
+                alias            TEXT    NOT NULL,
+                alias_normalized TEXT    NOT NULL,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(tenant_id, alias_normalized)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payer_aliases_normalized
+            ON payer_aliases(alias_normalized)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payment_audit_findings (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                finding_type     TEXT    NOT NULL
+                                   CHECK(finding_type IN (
+                                       'missing_payment', 'amount_mismatch',
+                                       'unmatched_movement', 'match_found'
+                                   )),
+                contract_id      INTEGER REFERENCES contracts(id),
+                period           TEXT,
+                bank_movement_id INTEGER REFERENCES bank_movements(id),
+                expected_amount  INTEGER,
+                candidate_amount INTEGER,
+                confidence       TEXT    NOT NULL DEFAULT 'medium'
+                                   CHECK(confidence IN ('low', 'medium', 'high')),
+                status           TEXT    NOT NULL DEFAULT 'open'
+                                   CHECK(status IN ('open', 'resolved', 'dismissed')),
+                resolution_note  TEXT,
+                created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                resolved_at      TEXT
+            )
+            """
+        )
+        # One open finding per contract/period/finding_type.
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_contract_period_type
+            ON payment_audit_findings(contract_id, period, finding_type)
+            WHERE contract_id IS NOT NULL AND status = 'open'
+            """
+        )
+        # One open finding per bank_movement/finding_type.
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_movement_type
+            ON payment_audit_findings(bank_movement_id, finding_type)
+            WHERE bank_movement_id IS NOT NULL AND status = 'open'
+            """
+        )
+
         conn.commit()
 
 
@@ -2534,6 +2651,292 @@ def delete_payment(payment_id: int) -> bool:
             WHERE id = ?
             """,
             (payment_id,),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+# --- Payment audit: bank statements -----------------------------------------
+
+def _bank_statement_row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "bank": row[1],
+        "original_filename": row[2],
+        "stored_path": row[3],
+        "mime_type": row[4],
+        "size_bytes": row[5],
+        "file_hash": row[6],
+        "period_label": row[7],
+        "status": row[8],
+        "parse_error": row[9],
+        "movements_count": row[10],
+        "uploaded_at": row[11],
+        "parsed_at": row[12],
+    }
+
+
+def insert_bank_statement(data: dict) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO bank_statements
+                (bank, original_filename, stored_path, mime_type, size_bytes,
+                 file_hash, period_label, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data.get("bank", "banco_de_chile"),
+                data["original_filename"],
+                data["stored_path"],
+                data["mime_type"],
+                data["size_bytes"],
+                data["file_hash"],
+                data.get("period_label"),
+                data.get("status", "uploaded"),
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_bank_statement(statement_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM bank_statements WHERE id = ?", (statement_id,)
+        ).fetchone()
+    return _bank_statement_row_to_dict(row) if row else None
+
+
+def get_bank_statement_by_file_hash(file_hash: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM bank_statements WHERE file_hash = ?", (file_hash,)
+        ).fetchone()
+    return _bank_statement_row_to_dict(row) if row else None
+
+
+def list_bank_statements() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM bank_statements ORDER BY uploaded_at DESC, id DESC"
+        ).fetchall()
+    return [_bank_statement_row_to_dict(row) for row in rows]
+
+
+def update_bank_statement_parse_result(
+    statement_id: int,
+    status: str,
+    movements_count: int = 0,
+    parse_error: str | None = None,
+    parsed_at: str | None = None,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE bank_statements
+            SET status = ?, movements_count = ?, parse_error = ?, parsed_at = ?
+            WHERE id = ?
+            """,
+            (status, movements_count, parse_error, parsed_at, statement_id),
+        )
+        conn.commit()
+
+
+# --- Payment audit: bank movements -------------------------------------------
+
+def _bank_movement_row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "statement_id": row[1],
+        "movement_date": row[2],
+        "description": row[3],
+        "amount": row[4],
+        "balance_after": row[5],
+        "dedup_key": row[6],
+        "matched_payment_id": row[7],
+        "created_at": row[8],
+    }
+
+
+def insert_bank_movement(data: dict) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO bank_movements
+                (statement_id, movement_date, description, amount, balance_after,
+                 dedup_key, matched_payment_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["statement_id"],
+                data["movement_date"],
+                data["description"],
+                data["amount"],
+                data.get("balance_after"),
+                data["dedup_key"],
+                data.get("matched_payment_id"),
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_bank_movement(movement_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM bank_movements WHERE id = ?", (movement_id,)
+        ).fetchone()
+    return _bank_movement_row_to_dict(row) if row else None
+
+
+def list_bank_movements(statement_id: int | None = None) -> list[dict]:
+    with get_connection() as conn:
+        if statement_id is not None:
+            rows = conn.execute(
+                """
+                SELECT * FROM bank_movements
+                WHERE statement_id = ?
+                ORDER BY movement_date, id
+                """,
+                (statement_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM bank_movements ORDER BY movement_date, id"
+            ).fetchall()
+    return [_bank_movement_row_to_dict(row) for row in rows]
+
+
+# --- Payment audit: payer aliases --------------------------------------------
+
+def _payer_alias_row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "tenant_id": row[1],
+        "alias": row[2],
+        "alias_normalized": row[3],
+        "created_at": row[4],
+    }
+
+
+def insert_payer_alias(data: dict) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payer_aliases (tenant_id, alias, alias_normalized)
+            VALUES (?, ?, ?)
+            """,
+            (data["tenant_id"], data["alias"], data["alias_normalized"]),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def list_payer_aliases(tenant_id: int | None = None) -> list[dict]:
+    with get_connection() as conn:
+        if tenant_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM payer_aliases WHERE tenant_id = ? ORDER BY id",
+                (tenant_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM payer_aliases ORDER BY id").fetchall()
+    return [_payer_alias_row_to_dict(row) for row in rows]
+
+
+def delete_payer_alias(alias_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM payer_aliases WHERE id = ?", (alias_id,))
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+# --- Payment audit: findings ---------------------------------------------------
+
+def _payment_audit_finding_row_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "finding_type": row[1],
+        "contract_id": row[2],
+        "period": row[3],
+        "bank_movement_id": row[4],
+        "expected_amount": row[5],
+        "candidate_amount": row[6],
+        "confidence": row[7],
+        "status": row[8],
+        "resolution_note": row[9],
+        "created_at": row[10],
+        "resolved_at": row[11],
+    }
+
+
+def insert_payment_audit_finding(data: dict) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO payment_audit_findings
+                (finding_type, contract_id, period, bank_movement_id,
+                 expected_amount, candidate_amount, confidence, status, resolution_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["finding_type"],
+                data.get("contract_id"),
+                data.get("period"),
+                data.get("bank_movement_id"),
+                data.get("expected_amount"),
+                data.get("candidate_amount"),
+                data.get("confidence", "medium"),
+                data.get("status", "open"),
+                data.get("resolution_note"),
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_payment_audit_finding(finding_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payment_audit_findings WHERE id = ?", (finding_id,)
+        ).fetchone()
+    return _payment_audit_finding_row_to_dict(row) if row else None
+
+
+def list_payment_audit_findings(
+    status: str | None = None, finding_type: str | None = None
+) -> list[dict]:
+    conditions = []
+    params: list = []
+    if status is not None:
+        conditions.append("status = ?")
+        params.append(status)
+    if finding_type is not None:
+        conditions.append("finding_type = ?")
+        params.append(finding_type)
+
+    query = "SELECT * FROM payment_audit_findings"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY id"
+
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_payment_audit_finding_row_to_dict(row) for row in rows]
+
+
+def mark_payment_audit_finding_resolved(
+    finding_id: int, status: str, resolution_note: str | None = None
+) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payment_audit_findings
+            SET status = ?, resolution_note = ?, resolved_at = datetime('now')
+            WHERE id = ?
+            """,
+            (status, resolution_note, finding_id),
         )
         conn.commit()
     return cursor.rowcount > 0

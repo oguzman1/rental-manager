@@ -2168,26 +2168,25 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
     return updated_current, updated_next
 
 
-def _ensure_payment_periods(contract_id: int) -> int:
-    """Fill gaps in the payment schedule without extending it.
+def _ensure_payment_periods(contract_id: int, today: date | None = None) -> int:
+    """Ensure the payment schedule is complete up through the generation horizon.
 
-    Inserts a pending row for any month that is missing within the range
-    [min_existing_period, max_existing_period]. Existing rows are never
-    modified (INSERT OR IGNORE). Does not extend the schedule beyond the
-    current last period. Returns count of rows inserted.
+    Two guarantees for active contracts:
+    1. Gaps within [min_existing, min(max_existing, horizon)] are filled.
+       The cap at horizon prevents bridging across a far-future outlier payment.
+    2. All months from max(today_ym, contract_start_ym) through horizon exist.
+
+    Existing rows are never modified (INSERT OR IGNORE). Returns count inserted.
+    Inactive contracts are skipped (returns 0).
     """
-    with get_connection() as conn:
-        bounds = conn.execute(
-            "SELECT MIN(period), MAX(period) FROM payments WHERE contract_id = ?",
-            (contract_id,),
-        ).fetchone()
-        if bounds is None or bounds[0] is None:
-            return 0
-        min_ym, max_ym = bounds
+    ref = today or date.today()
+    today_ym = ref.strftime("%Y-%m")
+    horizon_ym = _period_horizon(ref)
 
+    with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT c.payment_day,
+            SELECT c.payment_day, c.start_date,
                    (SELECT amount FROM rent_changes
                     WHERE contract_id = c.id
                     ORDER BY effective_from DESC, id DESC LIMIT 1) AS current_rent
@@ -2197,7 +2196,7 @@ def _ensure_payment_periods(contract_id: int) -> int:
         ).fetchone()
         if row is None:
             return 0
-        payment_day, current_rent = row
+        payment_day, start_date_str, current_rent = row
         if not current_rent:
             return 0
 
@@ -2209,10 +2208,7 @@ def _ensure_payment_periods(contract_id: int) -> int:
             ).fetchall()
         }
 
-        inserted = 0
-        for period in _iter_months(min_ym, max_ym):
-            if period in existing:
-                continue
+        def _insert_pending(period: str) -> None:
             y, m = int(period[:4]), int(period[5:7])
             last_day = monthrange(y, m)[1]
             due_date_str = f"{y}-{m:02d}-{min(payment_day, last_day):02d}"
@@ -2224,7 +2220,27 @@ def _ensure_payment_periods(contract_id: int) -> int:
                 """,
                 (contract_id, period, due_date_str, current_rent),
             )
-            inserted += 1
+
+        inserted = 0
+
+        # 1. Fill historical gaps within existing range, capped at horizon.
+        if existing:
+            min_ym = min(existing)
+            fill_cap = min(max(existing), horizon_ym)
+            for period in _iter_months(min_ym, fill_cap):
+                if period not in existing:
+                    _insert_pending(period)
+                    existing.add(period)
+                    inserted += 1
+
+        # 2. Extend to the full operational window: today through horizon.
+        contract_start_ym = start_date_str[:7]
+        op_start = max(today_ym, contract_start_ym)
+        for period in _iter_months(op_start, horizon_ym):
+            if period not in existing:
+                _insert_pending(period)
+                existing.add(period)
+                inserted += 1
 
         if inserted:
             conn.commit()

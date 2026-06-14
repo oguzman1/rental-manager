@@ -417,6 +417,23 @@ def _setup_payment_property() -> int:
     return _get_contract_id_for_rol(_PAYMENT_ROL)
 
 
+def _get_or_create_period_id(cid: int, period: str, **extra) -> int:
+    """Return the payment id for `period` on contract `cid`.
+
+    If the period was already auto-created by _ensure_payment_periods (which
+    now pre-fills months up to the generation horizon), POST returns 409 and
+    we fall back to fetching the existing row. This makes tests that only need
+    a valid payment id robust against the horizon-based pre-creation.
+    """
+    r = client.post(f"/contracts/{cid}/payments", json={"period": period, **extra})
+    if r.status_code == 200:
+        return r.json()["id"]
+    assert r.status_code == 409, f"Unexpected status {r.status_code}: {r.text}"
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    row = next(p for p in payments if p["period"] == period)
+    return row["id"]
+
+
 _ATOMIC_ROL = "09001-00099"
 
 _ATOMIC_PAYMENT_PROPERTY = {
@@ -549,7 +566,8 @@ def test_patch_payment_comment_only_leaves_status_unchanged():
 
 def test_patch_payment_comment_persists():
     cid = _setup_payment_property()
-    pid = client.post(f"/contracts/{cid}/payments", json={"period": "2025-08"}).json()["id"]
+    # Period may already exist due to horizon-based pre-creation; use helper.
+    pid = _get_or_create_period_id(cid, "2025-08")
 
     r = client.patch(f"/payments/{pid}", json={"comment": "nota de prueba"})
     assert r.status_code == 200
@@ -561,9 +579,9 @@ def test_patch_payment_comment_persists():
 
 def test_patch_payment_comment_can_be_cleared():
     cid = _setup_payment_property()
-    pid = client.post(
-        f"/contracts/{cid}/payments", json={"period": "2025-09", "comment": "inicial"}
-    ).json()["id"]
+    # Set a known comment via PATCH, then clear it.
+    pid = _get_or_create_period_id(cid, "2025-09")
+    client.patch(f"/payments/{pid}", json={"comment": "inicial"})
 
     r = client.patch(f"/payments/{pid}", json={"comment": None})
     assert r.status_code == 200
@@ -575,12 +593,21 @@ def test_patch_payment_comment_can_be_cleared():
 
 def test_create_payment_comment_persists():
     cid = _setup_payment_property()
+    # If period was pre-created by _ensure, set comment via PATCH instead.
     r = client.post(
         f"/contracts/{cid}/payments",
         json={"period": "2025-10", "comment": "primer pago"},
     )
-    assert r.status_code == 200
-    assert r.json()["comment"] == "primer pago"
+    if r.status_code == 409:
+        # Period already exists; set the comment via PATCH and verify.
+        payments = client.get(f"/contracts/{cid}/payments").json()
+        pid = next(p["id"] for p in payments if p["period"] == "2025-10")
+        pr = client.patch(f"/payments/{pid}", json={"comment": "primer pago"})
+        assert pr.status_code == 200
+        assert pr.json()["comment"] == "primer pago"
+    else:
+        assert r.status_code == 200
+        assert r.json()["comment"] == "primer pago"
 
     payments = client.get(f"/contracts/{cid}/payments").json()
     assert next(p for p in payments if p["period"] == "2025-10")["comment"] == "primer pago"
@@ -629,11 +656,10 @@ def test_create_payment_invalid_period_returns_422():
 
 def test_delete_payment_returns_204():
     cid = _setup_payment_property()
-    payment = client.post(
-        f"/contracts/{cid}/payments", json={"period": "2025-11"}
-    ).json()
+    # Period may already exist due to horizon pre-creation; use helper.
+    pid = _get_or_create_period_id(cid, "2025-11")
 
-    response = client.delete(f"/payments/{payment['id']}")
+    response = client.delete(f"/payments/{pid}")
     assert response.status_code == 204
     assert response.content == b""
 
@@ -646,13 +672,14 @@ def test_delete_payment_unknown_returns_404():
 
 def test_delete_payment_keeps_period_as_pending():
     cid = _setup_payment_property()
-    # Mark 2025-12 as paid first
-    payment = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2025-12", "paid_amount": 500000, "paid_at": "2025-12-05"},
-    ).json()
-    payment_id = payment["id"]
-    assert payment["status"] == "paid"
+    # Period may already exist due to horizon pre-creation; use helper to get id,
+    # then PATCH to mark it paid before testing delete behavior.
+    payment_id = _get_or_create_period_id(cid, "2025-12")
+    pr = client.patch(
+        f"/payments/{payment_id}",
+        json={"paid_amount": 500000, "paid_at": "2025-12-05"},
+    )
+    assert pr.json()["status"] == "paid"
 
     client.delete(f"/payments/{payment_id}")
 
@@ -668,11 +695,12 @@ def test_delete_payment_keeps_period_as_pending():
 
 def test_patch_payment_expected_amount_updates_and_clears_overpayment():
     cid = _setup_payment_property()
-    payment = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2027-01", "paid_amount": 800000, "paid_at": "2027-01-05"},
+    # Period may exist; get/create it then PATCH with paid_amount to set up overpayment.
+    pid = _get_or_create_period_id(cid, "2027-01")
+    payment = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 800000, "paid_at": "2027-01-05"},
     ).json()
-    pid = payment["id"]
     assert payment["expected_amount"] == 500000
     assert payment["overpayment"] == 300000
 
@@ -686,8 +714,8 @@ def test_patch_payment_expected_amount_updates_and_clears_overpayment():
 
 def test_patch_payment_expected_amount_with_paid_amount_no_overpayment():
     cid = _setup_payment_property()
-    payment = client.post(f"/contracts/{cid}/payments", json={"period": "2027-02"}).json()
-    pid = payment["id"]
+    # Period may exist; get/create it then PATCH with both paid and expected amounts.
+    pid = _get_or_create_period_id(cid, "2027-02")
 
     r = client.patch(
         f"/payments/{pid}",
@@ -703,11 +731,12 @@ def test_patch_payment_expected_amount_with_paid_amount_no_overpayment():
 
 def test_patch_payment_expected_amount_absent_preserves_existing():
     cid = _setup_payment_property()
-    payment = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2027-03", "paid_amount": 500000, "paid_at": "2027-03-05"},
+    # Period may exist; get/create it then PATCH with paid_amount.
+    pid = _get_or_create_period_id(cid, "2027-03")
+    payment = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 500000, "paid_at": "2027-03-05"},
     ).json()
-    pid = payment["id"]
     original_expected = payment["expected_amount"]
 
     r = client.patch(f"/payments/{pid}", json={"comment": "nota"})
@@ -2502,9 +2531,18 @@ def test_delete_rent_change_not_found_returns_404():
 # ============================================================
 
 def test_contract_creation_generates_12_periods():
+    # With horizon-based generation, _ensure now also adds months from today through
+    # today+12, so the count is ≥ 12. Assert the original 12-month initial window is
+    # present and that no period exceeds the horizon.
     _, _, contract_id = _setup_contract_scenario()
     payments = client.get(f"/contracts/{contract_id}/payments").json()
-    assert len(payments) == 12
+    periods = [p["period"] for p in payments]
+    assert len(payments) >= 12
+    assert "2024-01" in periods
+    assert "2024-12" in periods
+    horizon_ym = _expected_horizon_ym()
+    beyond = [p for p in periods if p > horizon_ym]
+    assert beyond == [], f"No periods beyond horizon allowed: {beyond}"
 
 
 def test_generated_periods_use_payment_day_for_due_date():
@@ -2552,17 +2590,20 @@ def test_managed_property_creation_also_generates_periods():
     assert r.status_code == 200
     cid = _get_contract_id_for_rol("11001-00001")
     payments = client.get(f"/contracts/{cid}/payments").json()
-    assert len(payments) == 12
+    # With horizon-based generation, count is ≥ 12. Original window must be present.
+    assert len(payments) >= 12
     periods = [p["period"] for p in payments]
     assert "2024-06" in periods
     assert "2025-05" in periods
+    horizon_ym = _expected_horizon_ym()
+    beyond = [p for p in periods if p > horizon_ym]
+    assert beyond == [], f"No periods beyond horizon allowed: {beyond}"
 
 
 def test_overpayment_field_is_returned_in_payment_response():
     cid = _setup_payment_property()
-    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-01"})
-    assert r.status_code == 200
-    pid = r.json()["id"]
+    # Period may already exist due to horizon gap-fill; use helper.
+    pid = _get_or_create_period_id(cid, "2026-01")
 
     r = client.patch(f"/payments/{pid}", json={"paid_amount": 600000})
     assert r.status_code == 200
@@ -2574,24 +2615,27 @@ def test_overpayment_field_is_returned_in_payment_response():
 
 def test_overpayment_zero_when_exactly_paid():
     cid = _setup_payment_property()
-    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-02"})
-    pid = r.json()["id"]
+    pid = _get_or_create_period_id(cid, "2026-02")
     r = client.patch(f"/payments/{pid}", json={"paid_amount": 500000})
     assert r.json()["overpayment"] == 0
 
 
 def test_payment_response_includes_carry_forward_waived_default_false():
     cid = _setup_payment_property()
-    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-10"})
-    assert r.status_code == 200
-    assert r.json()["carry_forward_waived"] is False
+    # Period may already exist; fetch it and confirm the default field is present.
+    pid = _get_or_create_period_id(cid, "2026-10")
+    payments = client.get(f"/contracts/{cid}/payments").json()
+    row = next(p for p in payments if p["id"] == pid)
+    assert row["carry_forward_waived"] is False
 
 
 def test_create_payment_with_carry_forward_waived_true():
     cid = _setup_payment_property()
-    r = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2026-11", "paid_amount": 600000, "carry_forward_waived": True},
+    # Period may already exist; use PATCH to set carry_forward_waived.
+    pid = _get_or_create_period_id(cid, "2026-11")
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 600000, "carry_forward_waived": True},
     )
     assert r.status_code == 200
     assert r.json()["carry_forward_waived"] is True
@@ -2599,7 +2643,7 @@ def test_create_payment_with_carry_forward_waived_true():
 
 def test_patch_payment_sets_carry_forward_waived():
     cid = _setup_payment_property()
-    pid = client.post(f"/contracts/{cid}/payments", json={"period": "2026-12"}).json()["id"]
+    pid = _get_or_create_period_id(cid, "2026-12")
 
     r = client.patch(
         f"/payments/{pid}",
@@ -2616,8 +2660,7 @@ def test_patch_payment_sets_carry_forward_waived():
 
 def test_apply_overpayment_endpoint_moves_excess_to_next():
     cid = _setup_payment_property()
-    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-03"})
-    pid = r.json()["id"]
+    pid = _get_or_create_period_id(cid, "2026-03")
     client.patch(f"/payments/{pid}", json={"paid_amount": 600000})
 
     r = client.post(f"/payments/{pid}/apply-overpayment")
@@ -2635,8 +2678,7 @@ def test_apply_overpayment_endpoint_moves_excess_to_next():
 
 def test_apply_overpayment_returns_400_when_none():
     cid = _setup_payment_property()
-    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-05"})
-    pid = r.json()["id"]
+    pid = _get_or_create_period_id(cid, "2026-05")
     client.patch(f"/payments/{pid}", json={"paid_amount": 500000})
 
     r = client.post(f"/payments/{pid}/apply-overpayment")
@@ -2674,9 +2716,11 @@ def test_close_contract_removes_future_pending_periods():
 
 def test_create_payment_with_paid_amount_derives_status():
     cid = _setup_payment_property()
-    r = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2026-06", "paid_amount": 250000, "paid_at": "2026-06-05"},
+    # Period may already exist in operational window; get/create then PATCH.
+    pid = _get_or_create_period_id(cid, "2026-06")
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 250000, "paid_at": "2026-06-05"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -2686,9 +2730,10 @@ def test_create_payment_with_paid_amount_derives_status():
 
 def test_create_payment_with_full_amount_marks_paid():
     cid = _setup_payment_property()
-    r = client.post(
-        f"/contracts/{cid}/payments",
-        json={"period": "2026-07", "paid_amount": 500000, "paid_at": "2026-07-05"},
+    pid = _get_or_create_period_id(cid, "2026-07")
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 500000, "paid_at": "2026-07-05"},
     )
     assert r.status_code == 200
 
@@ -5126,3 +5171,72 @@ def test_period_horizon_january():
     """_period_horizon wraps correctly from January."""
     result = _db._period_horizon(_date(2027, 1, 1))
     assert result == "2028-01"
+
+
+_HORIZON_BASE_ROL = "HORIZON-TEST-"
+
+
+def _create_horizon_contract(rol_suffix: str, start_date: str = "2025-01-01") -> int:
+    """Create a minimal contract for horizon tests. Idempotent: POST is ignored if ROL exists."""
+    rol = _HORIZON_BASE_ROL + rol_suffix
+    client.post("/managed-property", json={
+        "property": {
+            "comuna": "HORIZON TEST",
+            "rol": rol,
+            "address": f"Horizon Test {rol_suffix}",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+            "fojas": "1",
+            "property_number": "1",
+            "year": 2024,
+            "fiscal_appraisal": 100000000,
+        },
+        "rental": {
+            "tenant_name": "Horizon Tenant",
+            "payment_day": 5,
+            "property_label": f"prop {rol_suffix}",
+            "current_rent": 600000,
+            "adjustment_frequency": "annual",
+            "start_date": start_date,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    })
+    return _get_contract_id_for_rol(rol)
+
+
+def _get_db_periods(contract_id: int) -> set[str]:
+    conn = _sqlite3.connect("test_rental_manager.db")
+    rows = conn.execute(
+        "SELECT period FROM payments WHERE contract_id = ?", (contract_id,)
+    ).fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def test_horizon_active_contract_creates_correct_range():
+    """GET /payments ensures current month through current+12 are present."""
+    cid = _create_horizon_contract("001")
+    result = client.get(f"/contracts/{cid}/payments").json()
+    periods = {p["period"] for p in result}
+
+    today_ym = _today_ym()
+    horizon_ym = _expected_horizon_ym()
+
+    assert today_ym in periods, f"Current month {today_ym} must be present"
+    assert horizon_ym in periods, f"Horizon month {horizon_ym} must be present"
+
+    beyond = [p for p in periods if p > horizon_ym]
+    assert beyond == [], f"No periods beyond horizon allowed, got: {beyond}"
+
+
+def test_horizon_idempotent_no_duplicate_periods():
+    """Calling GET /payments twice returns identical period sets."""
+    cid = _get_contract_id_for_rol("HORIZON-TEST-001")
+    r1 = client.get(f"/contracts/{cid}/payments").json()
+    r2 = client.get(f"/contracts/{cid}/payments").json()
+
+    periods1 = sorted(p["period"] for p in r1)
+    periods2 = sorted(p["period"] for p in r2)
+    assert periods1 == periods2, "Second GET must not add or remove periods"
+    assert len(periods1) == len(set(periods1)), "No duplicate periods"

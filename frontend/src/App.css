@@ -904,6 +904,9 @@
 }
 
 .btn-payments-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   padding: 3px 10px;
   border: 1px solid transparent;

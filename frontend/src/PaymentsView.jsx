@@ -114,6 +114,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
   const [editDeductions, setEditDeductions] = useState([])
   const [editGgcc, setEditGgcc] = useState('')
 
+  const [rentChanges, setRentChanges] = useState([])
+
   // Overpayment
   const [applyingOverpayment, setApplyingOverpayment] = useState(new Set())
   const [overpaymentError, setOverpaymentError] = useState(null)
@@ -130,9 +132,13 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
 
   async function loadPayments() {
     try {
-      const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`)
-      if (!res.ok) throw new Error(`Error ${res.status}`)
-      setPayments(await res.json())
+      const [pmtRes, rcRes] = await Promise.all([
+        fetch(`${API_BASE}/contracts/${contract.id}/payments`),
+        fetch(`${API_BASE}/contracts/${contract.id}/rent-changes`),
+      ])
+      if (!pmtRes.ok) throw new Error(`Error ${pmtRes.status}`)
+      setPayments(await pmtRes.json())
+      if (rcRes.ok) setRentChanges(await rcRes.json())
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -145,11 +151,15 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     let cancelled = false
     async function fetchData() {
       try {
-        const res = await fetch(`${API_BASE}/contracts/${contract.id}/payments`)
-        if (!res.ok) throw new Error(`Error ${res.status}`)
-        const data = await res.json()
+        const [pmtRes, rcRes] = await Promise.all([
+          fetch(`${API_BASE}/contracts/${contract.id}/payments`),
+          fetch(`${API_BASE}/contracts/${contract.id}/rent-changes`),
+        ])
+        if (!pmtRes.ok) throw new Error(`Error ${pmtRes.status}`)
+        const data = await pmtRes.json()
         if (!cancelled) {
           setPayments(data)
+          if (rcRes.ok) setRentChanges(await rcRes.json())
           setIsLoading(false)
         }
       } catch (err) {
@@ -625,7 +635,13 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       })
       if (!res.ok) {
         const errData = await res.json().catch(() => null)
-        throw new Error(errData?.detail ?? `Error al registrar reajuste: ${res.status}`)
+        const detail = errData?.detail ?? ''
+        const isChrono = detail.includes('strictly after') || detail.includes('reajuste posterior')
+        throw new Error(
+          isChrono
+            ? 'No se puede registrar este reajuste porque ya existe un reajuste posterior. Usa otra opción o revisa Reajustes.'
+            : detail || `Error al registrar reajuste: ${res.status}`
+        )
       }
 
       setPendingOverpaymentDraft(null)
@@ -739,6 +755,10 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
       nextPayment,
     } = pendingOverpaymentDraft
 
+    const latestRcEffectiveFrom = rentChanges.length > 0 ? rentChanges[0].effective_from : null
+    const candidateEffectiveFrom = period + '-01'
+    const rentChangeAllowed = !latestRcEffectiveFrom || candidateEffectiveFrom > latestRcEffectiveFrom
+
     const fullyPaidBlocked = isFullyPaid(nextPayment)
     const nextRemainingCapacity = nextPayment == null
       ? (contract.current_rent ?? 0)
@@ -834,6 +854,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               : `Si guardas y abonas el excedente, se abonarán ${formatCLP(overpaymentAmount)} a ${formatPeriodLabel(nextPeriod)}.`
           }
         </p>
+        <p className="payment-overpayment-confirm-text">
+          {rentChangeAllowed
+            ? `Actualizaría el arriendo a ${formatCLP(enteredAmount)} desde ${formatPeriodLabel(period)}.`
+            : `No se puede registrar un reajuste desde ${formatPeriodLabel(period)} porque ya existe un reajuste posterior.`}
+        </p>
         <div className="payment-form-actions">
           {!nextBlocked && (
             <button
@@ -855,16 +880,16 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               {isSubmitting ? 'Guardando…' : 'Guardar sin abonar excedente'}
             </button>
           )}
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={saveAsRentChange}
-            disabled={isSubmitting || isRentChangeSaving}
-          >
-            {isRentChangeSaving
-              ? 'Guardando…'
-              : `Registrar reajuste — Actualizar arriendo a ${formatCLP(enteredAmount)} desde ${formatPeriodLabel(period)}`}
-          </button>
+          {rentChangeAllowed && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={saveAsRentChange}
+              disabled={isSubmitting || isRentChangeSaving}
+            >
+              {isRentChangeSaving ? 'Guardando…' : 'Actualizar arriendo'}
+            </button>
+          )}
           <button
             type="button"
             className="btn-secondary"

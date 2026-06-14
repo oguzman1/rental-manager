@@ -3354,6 +3354,57 @@ def test_adjustment_due_false_after_rent_change_applied():
     assert item["adjustment_alert_state"] == "resolved"
 
 
+def test_current_rent_excludes_future_rent_change():
+    # Mirrors the "depto las condes" scenario: a contract whose rent_changes
+    # include a row already in effect (due_adjustment_date) and a pre-registered
+    # row for the next cycle (next_adjustment_date, still in the future).
+    # current_rent / last_adjustment_date must come from the row that is
+    # already in effect today, not the future one — while the future row must
+    # remain visible in /contracts/{id}/rent-changes and not trigger a false alert.
+    start_date = _first_day_for_months_ago(60)       # 5 years ago
+    due_date = _first_day_for_months_ago(0)          # this cycle's adjustment (already in effect)
+    next_date = _first_day_for_months_ago(-12)       # next cycle's adjustment (future, pre-registered)
+
+    rol = "09994-00001"
+    client.post("/managed-property", json={
+        "property": {
+            "comuna": "TEST",
+            "rol": rol,
+            "address": "TEST FUTURE RENT CHANGE",
+            "destination": "HABITACIONAL",
+            "status": "occupied",
+        },
+        "rental": {
+            "tenant_name": "Tenant Future Rent",
+            "payment_day": 5,
+            "property_label": "test future rent change",
+            "current_rent": 700000,
+            "adjustment_frequency": "annual",
+            "start_date": start_date,
+            "notice_days": 30,
+            "adjustment_month": "january",
+        },
+    })
+    cid = _get_contract_id_for_rol(rol)
+
+    r = client.post(f"/contracts/{cid}/rent-changes", json={"effective_from": due_date, "amount": 759808})
+    assert r.status_code == 201
+    r = client.post(f"/contracts/{cid}/rent-changes", json={"effective_from": next_date, "amount": 750000})
+    assert r.status_code == 201
+
+    item = next(i for i in client.get("/dashboard").json() if i.get("contract_id") == cid)
+    assert item["current_rent"] == 759808
+    assert item["last_adjustment_date"] == due_date
+    assert item["next_adjustment_date"] == next_date
+    assert item["adjustment_alert_state"] == "resolved"
+    assert item["requires_adjustment_notice"] is False
+
+    history = client.get(f"/contracts/{cid}/rent-changes").json()
+    future_rows = [rc for rc in history if rc["effective_from"] == next_date]
+    assert len(future_rows) == 1
+    assert future_rows[0]["amount"] == 750000
+
+
 # Frontend targetPeriod no-rows path — verified by code inspection.
 # PaymentsView.jsx openAdd(): the payments.length === 0 branch previously called
 # setFormCustomPeriod(todayLocal().slice(0, 7)), which ignored targetPeriod.

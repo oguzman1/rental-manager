@@ -561,6 +561,45 @@ _LATEST_ADJUSTMENT = """
 """
 
 
+def _current_rent_sql(today: str) -> str:
+    """Rent change in effect as of `today` (falls back to the earliest row
+    if the contract hasn't started yet), excluding pre-registered future rows."""
+    return f"""
+        (
+            SELECT COALESCE(
+                (
+                    SELECT id FROM rent_changes
+                    WHERE  contract_id = c.id
+                    AND    effective_from <= '{today}'
+                    ORDER  BY effective_from DESC, id DESC
+                    LIMIT  1
+                ),
+                (
+                    SELECT id FROM rent_changes
+                    WHERE  contract_id = c.id
+                    ORDER  BY effective_from ASC, id ASC
+                    LIMIT  1
+                )
+            )
+        )
+    """
+
+
+def _last_adjustment_sql(today: str) -> str:
+    """Most recent rent change after the contract start that has taken
+    effect as of `today` — excludes pre-registered future rows."""
+    return f"""
+        (
+            SELECT effective_from FROM rent_changes
+            WHERE  contract_id = c.id
+            AND    effective_from > c.start_date
+            AND    effective_from <= '{today}'
+            ORDER  BY effective_from DESC, id DESC
+            LIMIT  1
+        )
+    """
+
+
 def list_managed_properties() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute(
@@ -600,7 +639,9 @@ def list_managed_properties() -> list[dict]:
     ]
 
 
-def list_rentals_for_adjustments() -> list[dict]:
+def list_rentals_for_adjustments(today: date | None = None) -> list[dict]:
+    today_iso = (today or date.today()).isoformat()
+
     with get_connection() as conn:
         rows = conn.execute(
             f"""
@@ -614,7 +655,7 @@ def list_rentals_for_adjustments() -> list[dict]:
                 rc.amount               AS current_rent,
                 c.adjustment_frequency,
                 c.start_date,
-                {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
+                {_last_adjustment_sql(today_iso)}    AS last_adjustment_date,
                 c.notice_sent_at,
                 c.notice_days,
                 c.id                    AS contract_id
@@ -626,7 +667,7 @@ def list_rentals_for_adjustments() -> list[dict]:
             JOIN tenants t
                 ON t.id = ct.tenant_id
             JOIN rent_changes rc
-                ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+                ON rc.contract_id = c.id AND rc.id = {_current_rent_sql(today_iso)}
             ORDER BY p.id DESC
             """
         ).fetchall()
@@ -812,7 +853,9 @@ def _first_missing_period(start_ym: str, cap_ym: str, existing: set) -> str | No
 
 
 def list_dashboard_items() -> list[dict]:
-    today_ym = date.today().strftime("%Y-%m")
+    today = date.today()
+    today_ym = today.strftime("%Y-%m")
+    today_iso = today.isoformat()
 
     with get_connection() as conn:
         conn.row_factory = sqlite3.Row
@@ -830,7 +873,7 @@ def list_dashboard_items() -> list[dict]:
                 c.adjustment_frequency,
                 c.start_date,
                 c.end_date,
-                {_LATEST_ADJUSTMENT}    AS last_adjustment_date,
+                {_last_adjustment_sql(today_iso)}    AS last_adjustment_date,
                 cp.status               AS current_payment_status,
                 cp.expected_amount      AS current_payment_amount,
                 cp.paid_amount          AS current_payment_paid_amount,
@@ -854,7 +897,7 @@ def list_dashboard_items() -> list[dict]:
             LEFT JOIN tenants t
                    ON t.id = ct.tenant_id
             LEFT JOIN rent_changes rc
-                   ON rc.contract_id = c.id AND rc.id = {_LATEST_RENT}
+                   ON rc.contract_id = c.id AND rc.id = {_current_rent_sql(today_iso)}
             LEFT JOIN (
                 SELECT
                     contract_id,

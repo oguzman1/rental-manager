@@ -1174,13 +1174,32 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                             {p.comment ?? <span className="text-muted">—</span>}
                           </td>
                           <td className="td td-actions">
-                            <button className="btn-payments" onClick={() => openEdit(p)}>
-                              Editar
-                            </button>
-                            {' '}
-                            <button className="btn-payments-danger" onClick={() => handleDelete(p)}>
-                              Eliminar
-                            </button>
+                            <div className="row-actions">
+                              <button
+                                className="btn-icon"
+                                title="Editar pago"
+                                aria-label="Editar pago"
+                                onClick={() => openEdit(p)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M10 2L12 4L5 11H3V9L10 2Z"/>
+                                </svg>
+                              </button>
+                              <button
+                                className="btn-icon-danger"
+                                title="Eliminar pago"
+                                aria-label="Eliminar pago"
+                                onClick={() => handleDelete(p)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M2.5 3.5H11.5"/>
+                                  <path d="M5 3.5V2.5C5 2.1 5.3 1.8 5.7 1.8H8.3C8.7 1.8 9 2.1 9 2.5V3.5"/>
+                                  <path d="M3.5 3.5L4 11.5C4 11.9 4.3 12.2 4.7 12.2H9.3C9.7 12.2 10 11.9 10 11.5L10.5 3.5"/>
+                                  <path d="M6 6V10"/>
+                                  <path d="M8 6V10"/>
+                                </svg>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                         {p.overpayment > 0 && !p.carry_forward_waived && dismissedOverpayments[p.id] !== p.overpayment && (

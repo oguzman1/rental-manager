@@ -545,7 +545,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               </button>
                             </td>
                             <td className="td" onClick={(e) => e.stopPropagation()}>
-                              <div className="contract-actions">
+                              <div className="row-actions">
                                 <button
                                   className="btn-icon"
                                   title="Editar parámetros contrato"

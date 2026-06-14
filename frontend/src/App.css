@@ -335,7 +335,7 @@
 }
 
 /* Allow the table to shrink to the available width instead of forcing a
-   scrollbar, used on tables whose actions column can wrap (see td-actions-wrap) */
+   scrollbar */
 .fluid-table-wrapper {
   min-width: 0;
   overflow: visible;
@@ -383,23 +383,19 @@
 .td-right { text-align: right; }
 .td-center { text-align: center; }
 
-/* Actions column: wrap buttons instead of forcing the table wider than the viewport */
-.td-actions-wrap {
-  white-space: normal;
-}
-
-.td-actions-wrap .btn-payments,
-.td-actions-wrap .btn-payments-danger,
-.td-actions-wrap a.btn-payments {
-  display: inline-flex;
-  margin: 2px 4px 2px 0;
-}
-
-/* Contract table action row */
-.contract-actions {
+/* Generic row action group: icon/text buttons aligned in a table cell */
+.row-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* Same as .row-actions but wraps onto multiple lines when buttons don't fit */
+.row-actions--wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* Small square icon button with hover tooltip (uses native title attribute) */
@@ -938,24 +934,6 @@
 .btn-payments:hover {
   background: var(--surface-2);
   color: var(--ink);
-}
-
-.btn-payments-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  padding: 3px 10px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--danger-fg);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn-payments-danger:hover {
-  background: var(--danger-bg);
 }
 
 .table-row-static {

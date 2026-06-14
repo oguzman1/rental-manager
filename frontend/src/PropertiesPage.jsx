@@ -477,23 +477,33 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
                           <td className="td td-center td-mono">
                             {p.payment_day ?? <span className="text-muted">—</span>}
                           </td>
-                          <td className="td">
-                            <button
-                              className="btn-payments"
-                              onClick={(e) => { e.stopPropagation(); openEdit(p.id) }}
-                            >
-                              Editar
-                            </button>
-                            {' '}
-                            <button
-                              className="btn-payments-danger"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleDelete(p.id, p.property_label ?? p.rol)
-                              }}
-                            >
-                              Eliminar
-                            </button>
+                          <td className="td" onClick={(e) => e.stopPropagation()}>
+                            <div className="row-actions">
+                              <button
+                                className="btn-icon"
+                                title="Editar"
+                                aria-label="Editar"
+                                onClick={() => openEdit(p.id)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M10 2L12 4L5 11H3V9L10 2Z"/>
+                                </svg>
+                              </button>
+                              <button
+                                className="btn-icon-danger"
+                                title="Eliminar"
+                                aria-label="Eliminar"
+                                onClick={() => handleDelete(p.id, p.property_label ?? p.rol)}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M2.5 3.5H11.5"/>
+                                  <path d="M5 3.5V2.5C5 2.1 5.3 1.8 5.7 1.8H8.3C8.7 1.8 9 2.1 9 2.5V3.5"/>
+                                  <path d="M3.5 3.5L4 11.5C4 11.9 4.3 12.2 4.7 12.2H9.3C9.7 12.2 10 11.9 10 11.5L10.5 3.5"/>
+                                  <path d="M6 6V10"/>
+                                  <path d="M8 6V10"/>
+                                </svg>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

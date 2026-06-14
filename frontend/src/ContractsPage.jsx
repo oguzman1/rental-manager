@@ -489,7 +489,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
             )}
             {!isLoading && !error && items.length > 0 && (
               <div className="table-scroll">
-                <div className="table-wrapper">
+                <div className="table-wrapper fluid-table-wrapper">
                   <table className="dashboard-table">
                     <thead>
                       <tr>
@@ -533,7 +533,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                             <td className="td td-muted">
                               {formatFrequency(item.adjustment_frequency)}
                             </td>
-                            <td className="td" onClick={(e) => e.stopPropagation()}>
+                            <td className="td td-actions-wrap" onClick={(e) => e.stopPropagation()}>
                               <button
                                 className="btn-payments"
                                 onClick={() => onPaymentSelect && onPaymentSelect(item)}

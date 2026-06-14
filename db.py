@@ -870,6 +870,17 @@ def _iter_months(start_ym: str, end_ym: str):
             m, y = 1, y + 1
 
 
+def _period_horizon(today: date) -> str:
+    """Return the inclusive upper-bound month for period generation.
+
+    Always current month + 12 months: 2026-06 → 2027-06.
+    """
+    m_offset = today.month - 1 + 12
+    hy = today.year + m_offset // 12
+    hm = m_offset % 12 + 1
+    return f"{hy}-{hm:02d}"
+
+
 def _first_missing_period(start_ym: str, cap_ym: str, existing: set) -> str | None:
     """Return the earliest month in [start_ym, cap_ym] not present in existing, or None."""
     for ym in _iter_months(start_ym, cap_ym):
@@ -2157,26 +2168,25 @@ def apply_overpayment_to_next_period(payment_id: int) -> tuple[dict, dict]:
     return updated_current, updated_next
 
 
-def _ensure_payment_periods(contract_id: int) -> int:
-    """Fill gaps in the payment schedule without extending it.
+def _ensure_payment_periods(contract_id: int, today: date | None = None) -> int:
+    """Ensure the payment schedule is complete up through the generation horizon.
 
-    Inserts a pending row for any month that is missing within the range
-    [min_existing_period, max_existing_period]. Existing rows are never
-    modified (INSERT OR IGNORE). Does not extend the schedule beyond the
-    current last period. Returns count of rows inserted.
+    Two guarantees for active contracts:
+    1. Gaps within [min_existing, min(max_existing, horizon)] are filled.
+       The cap at horizon prevents bridging across a far-future outlier payment.
+    2. All months from max(today_ym, contract_start_ym) through horizon exist.
+
+    Existing rows are never modified (INSERT OR IGNORE). Returns count inserted.
+    Inactive contracts are skipped (returns 0).
     """
-    with get_connection() as conn:
-        bounds = conn.execute(
-            "SELECT MIN(period), MAX(period) FROM payments WHERE contract_id = ?",
-            (contract_id,),
-        ).fetchone()
-        if bounds is None or bounds[0] is None:
-            return 0
-        min_ym, max_ym = bounds
+    ref = today or date.today()
+    today_ym = ref.strftime("%Y-%m")
+    horizon_ym = _period_horizon(ref)
 
+    with get_connection() as conn:
         row = conn.execute(
             """
-            SELECT c.payment_day,
+            SELECT c.payment_day, c.start_date,
                    (SELECT amount FROM rent_changes
                     WHERE contract_id = c.id
                     ORDER BY effective_from DESC, id DESC LIMIT 1) AS current_rent
@@ -2186,7 +2196,7 @@ def _ensure_payment_periods(contract_id: int) -> int:
         ).fetchone()
         if row is None:
             return 0
-        payment_day, current_rent = row
+        payment_day, start_date_str, current_rent = row
         if not current_rent:
             return 0
 
@@ -2198,10 +2208,7 @@ def _ensure_payment_periods(contract_id: int) -> int:
             ).fetchall()
         }
 
-        inserted = 0
-        for period in _iter_months(min_ym, max_ym):
-            if period in existing:
-                continue
+        def _insert_pending(period: str) -> None:
             y, m = int(period[:4]), int(period[5:7])
             last_day = monthrange(y, m)[1]
             due_date_str = f"{y}-{m:02d}-{min(payment_day, last_day):02d}"
@@ -2213,12 +2220,85 @@ def _ensure_payment_periods(contract_id: int) -> int:
                 """,
                 (contract_id, period, due_date_str, current_rent),
             )
-            inserted += 1
+
+        inserted = 0
+
+        # 1. Fill historical gaps within existing range, capped at horizon.
+        if existing:
+            min_ym = min(existing)
+            fill_cap = min(max(existing), horizon_ym)
+            for period in _iter_months(min_ym, fill_cap):
+                if period not in existing:
+                    _insert_pending(period)
+                    existing.add(period)
+                    inserted += 1
+
+        # 2. Extend to the full operational window: today through horizon.
+        contract_start_ym = start_date_str[:7]
+        op_start = max(today_ym, contract_start_ym)
+        for period in _iter_months(op_start, horizon_ym):
+            if period not in existing:
+                _insert_pending(period)
+                existing.add(period)
+                inserted += 1
 
         if inserted:
             conn.commit()
 
     return inserted
+
+
+def _cleanup_excessive_future_periods(contract_id: int, horizon_ym: str) -> int:
+    """Delete empty pending periods beyond the generation horizon.
+
+    A period is eligible for deletion only when ALL hold:
+    - period > horizon_ym
+    - status = 'pending'
+    - paid_amount is NULL or 0, comment is NULL or empty
+    - brokerage_fee = 0, repair_discount = 0, other_discount = 0
+    - carry_forward_waived = 0
+    - no payment_entries, payment_deductions, or owner_monthly_expenses
+
+    Returns the number of rows deleted.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.id
+            FROM payments p
+            WHERE p.contract_id = ?
+              AND p.period > ?
+              AND p.status = 'pending'
+              AND (p.paid_amount IS NULL OR p.paid_amount = 0)
+              AND (p.comment IS NULL OR p.comment = '')
+              AND p.brokerage_fee = 0
+              AND p.repair_discount = 0
+              AND p.other_discount = 0
+              AND p.carry_forward_waived = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_entries pe WHERE pe.payment_id = p.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM payment_deductions pd WHERE pd.payment_id = p.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM owner_monthly_expenses ome WHERE ome.payment_id = p.id
+              )
+            """,
+            (contract_id, horizon_ym),
+        ).fetchall()
+
+        if not rows:
+            return 0
+
+        ids = [r[0] for r in rows]
+        conn.execute(
+            f"DELETE FROM payments WHERE id IN ({','.join('?' * len(ids))})",
+            ids,
+        )
+        conn.commit()
+
+    return len(ids)
 
 
 def list_payments_for_contract(contract_id: int) -> list[dict]:

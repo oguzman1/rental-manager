@@ -534,29 +534,26 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               {formatFrequency(item.adjustment_frequency)}
                             </td>
                             <td className="td td-actions-wrap" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                className="btn-payments"
-                                onClick={() => onPaymentSelect && onPaymentSelect(item)}
-                              >
-                                Ver pagos
-                              </button>
-                              {' '}
-                              <button
-                                className="btn-payments"
-                                onClick={() => openEdit(item.id)}
-                              >
-                                Editar
-                              </button>
-                              {' '}
-                              <button
-                                className="btn-payments-danger"
-                                onClick={() => handleClose(item)}
-                              >
-                                Cerrar contrato
-                              </button>
-                              {item.contract_document_path && (
-                                <>
-                                  {' '}
+                              <div className="contract-actions-grid">
+                                <button
+                                  className="btn-payments"
+                                  onClick={() => onPaymentSelect && onPaymentSelect(item)}
+                                >
+                                  Ver pagos
+                                </button>
+                                <button
+                                  className="btn-payments"
+                                  onClick={() => openEdit(item.id)}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  className="btn-payments-danger"
+                                  onClick={() => handleClose(item)}
+                                >
+                                  Cerrar contrato
+                                </button>
+                                {item.contract_document_path && (
                                   <a
                                     className="btn-payments"
                                     href={`${API_BASE}/contracts/${item.id}/document`}
@@ -566,12 +563,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                   >
                                     Ver contrato
                                   </a>
-                                </>
-                              )}
-                              {!item.contract_document_path && item.contract_document_url && (
-                                <>
-                                  {' '}
-                                  {/^(https?|file):\/\//i.test(item.contract_document_url) ? (
+                                )}
+                                {!item.contract_document_path && item.contract_document_url && (
+                                  /^(https?|file):\/\//i.test(item.contract_document_url) ? (
                                     <a
                                       className="btn-payments"
                                       href={item.contract_document_url}
@@ -585,9 +579,9 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                     <span className="text-muted" style={{ fontSize: '0.85rem' }}>
                                       Documento registrado
                                     </span>
-                                  )}
-                                </>
-                              )}
+                                  )
+                                )}
+                              </div>
                             </td>
                           </tr>
                         )

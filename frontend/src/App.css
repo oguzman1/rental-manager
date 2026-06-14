@@ -395,6 +395,21 @@
   margin: 2px 4px 2px 0;
 }
 
+/* Contract actions: align buttons in a compact 2-column grid */
+.contract-actions-grid {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 6px 8px;
+  align-items: center;
+  justify-content: start;
+}
+
+.contract-actions-grid .btn-payments,
+.contract-actions-grid .btn-payments-danger,
+.contract-actions-grid a.btn-payments {
+  margin: 0;
+}
+
 .table-row { cursor: pointer; }
 
 .table-row:hover td { background: var(--surface-2); }

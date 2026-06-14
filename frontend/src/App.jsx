@@ -13,6 +13,7 @@ import TenantsPage from './TenantsPage'
 import AdjustmentsPage from './AdjustmentsPage'
 import PaymentsView from './PaymentsView'
 import RentChangesView from './RentChangesView'
+import PaymentAuditPage from './PaymentAuditPage'
 
 const API_URL = 'http://127.0.0.1:8000/dashboard'
 
@@ -314,6 +315,10 @@ function App() {
           onNoticeStateChanged={refreshDashboard}
         />
       )
+    }
+
+    if (route.name === 'payment-audit') {
+      return <PaymentAuditPage />
     }
 
     // Dashboard (default)

@@ -1,9 +1,10 @@
 const NAV_ITEMS = [
-  { id: 'dashboard',   label: 'Dashboard',      enabled: true },
-  { id: 'properties',  label: 'Propiedades',    enabled: true },
-  { id: 'contracts',   label: 'Contratos',      enabled: true },
-  { id: 'tenants',     label: 'Arrendatarios',  enabled: true },
-  { id: 'adjustments', label: 'Reajustes',      enabled: true },
+  { id: 'dashboard',     label: 'Dashboard',          enabled: true },
+  { id: 'properties',    label: 'Propiedades',        enabled: true },
+  { id: 'contracts',     label: 'Contratos',          enabled: true },
+  { id: 'tenants',       label: 'Arrendatarios',      enabled: true },
+  { id: 'adjustments',   label: 'Reajustes',          enabled: true },
+  { id: 'payment-audit', label: 'Auditoría de pagos', enabled: true },
 ]
 
 function Sidebar({ active, onNav }) {

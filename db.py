@@ -489,6 +489,12 @@ def delete_managed_property(property_id: int) -> bool:
         contract_ids = [row[0] for row in contract_rows]
 
         for cid in contract_ids:
+            conn.execute(
+                "DELETE FROM payment_entries WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)",
+                (cid,),
+            )
+            conn.execute("DELETE FROM payment_deductions WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)", (cid,))
+            conn.execute("DELETE FROM owner_monthly_expenses WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)", (cid,))
             conn.execute("DELETE FROM payments WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM rent_changes WHERE contract_id = ?", (cid,))
             conn.execute("DELETE FROM contract_tenants WHERE contract_id = ?", (cid,))

@@ -499,6 +499,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                         <th className="th th-right">Renta</th>
                         <th className="th th-center">Día pago</th>
                         <th className="th">Reajuste</th>
+                        <th className="th">Pagos</th>
                         <th className="th">Acciones</th>
                       </tr>
                     </thead>
@@ -534,19 +535,17 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               {formatFrequency(item.adjustment_frequency)}
                             </td>
                             <td className="td" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                className="btn-payments"
+                                title="Ver pagos"
+                                aria-label="Ver pagos"
+                                onClick={() => onPaymentSelect && onPaymentSelect(item)}
+                              >
+                                Ver pagos
+                              </button>
+                            </td>
+                            <td className="td" onClick={(e) => e.stopPropagation()}>
                               <div className="contract-actions">
-                                <button
-                                  className="btn-icon"
-                                  title="Ver pagos"
-                                  aria-label="Ver pagos"
-                                  onClick={() => onPaymentSelect && onPaymentSelect(item)}
-                                >
-                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                    <line x1="3" y1="4" x2="11" y2="4"/>
-                                    <line x1="3" y1="7" x2="11" y2="7"/>
-                                    <line x1="3" y1="10" x2="8" y2="10"/>
-                                  </svg>
-                                </button>
                                 <button
                                   className="btn-icon"
                                   title="Editar"

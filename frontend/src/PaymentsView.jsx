@@ -1285,9 +1285,9 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               {/* Add form */}
               {activeForm === 'add' && (
                 <form className="payment-form" onSubmit={handleAdd}>
-                  <div className="payment-form-row">
+                  <div className="payment-form-body">
                     {!formUseCustom ? (
-                      <label className="payment-form-label">
+                      <label className="payment-form-label" style={{ maxWidth: 300 }}>
                         Período
                         <select
                           className="payment-form-input"
@@ -1309,7 +1309,7 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                         </select>
                       </label>
                     ) : (
-                      <label className="payment-form-label">
+                      <label className="payment-form-label" style={{ maxWidth: 300 }}>
                         Período
                         <input
                           className="payment-form-input"
@@ -1466,8 +1466,8 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
               {/* Edit form */}
               {activeForm === 'edit' && (
                 <form className="payment-form" onSubmit={handleEdit}>
-                  <div className="payment-form-row">
-                    <label className="payment-form-label">
+                  <div className="payment-form-body">
+                    <label className="payment-form-label" style={{ maxWidth: 300 }}>
                       Período
                       <input
                         className="payment-form-input"

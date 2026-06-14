@@ -499,6 +499,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                         <th className="th th-right">Renta</th>
                         <th className="th th-center">Día pago</th>
                         <th className="th">Reajuste</th>
+                        <th className="th">Pagos</th>
                         <th className="th">Acciones</th>
                       </tr>
                     </thead>
@@ -533,47 +534,59 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                             <td className="td td-muted">
                               {formatFrequency(item.adjustment_frequency)}
                             </td>
-                            <td className="td td-actions-wrap" onClick={(e) => e.stopPropagation()}>
-                              <div className="contract-actions-grid">
+                            <td className="td" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                className="btn-payments"
+                                title="Ver pagos"
+                                aria-label="Ver pagos"
+                                onClick={() => onPaymentSelect && onPaymentSelect(item)}
+                              >
+                                Ver pagos
+                              </button>
+                            </td>
+                            <td className="td" onClick={(e) => e.stopPropagation()}>
+                              <div className="contract-actions">
                                 <button
-                                  className="btn-payments"
-                                  onClick={() => onPaymentSelect && onPaymentSelect(item)}
-                                >
-                                  Ver pagos
-                                </button>
-                                <button
-                                  className="btn-payments"
+                                  className="btn-icon"
+                                  title="Editar"
+                                  aria-label="Editar"
                                   onClick={() => openEdit(item.id)}
                                 >
-                                  Editar
-                                </button>
-                                <button
-                                  className="btn-payments-danger"
-                                  onClick={() => handleClose(item)}
-                                >
-                                  Cerrar contrato
+                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M10 2L12 4L5 11H3V9L10 2Z"/>
+                                  </svg>
                                 </button>
                                 {item.contract_document_path && (
                                   <a
-                                    className="btn-payments"
+                                    className="btn-icon"
                                     href={`${API_BASE}/contracts/${item.id}/document`}
                                     target="_blank"
                                     rel="noopener noreferrer"
+                                    title="Ver contrato"
+                                    aria-label="Ver contrato"
                                     onClick={(e) => e.stopPropagation()}
                                   >
-                                    Ver contrato
+                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M3 2H8L11 5V12H3V2Z"/>
+                                      <path d="M8 2V5H11"/>
+                                    </svg>
                                   </a>
                                 )}
                                 {!item.contract_document_path && item.contract_document_url && (
                                   /^(https?|file):\/\//i.test(item.contract_document_url) ? (
                                     <a
-                                      className="btn-payments"
+                                      className="btn-icon"
                                       href={item.contract_document_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
+                                      title="Abrir contrato"
+                                      aria-label="Abrir contrato"
                                       onClick={(e) => e.stopPropagation()}
                                     >
-                                      Abrir contrato
+                                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M3 2H8L11 5V12H3V2Z"/>
+                                        <path d="M8 2V5H11"/>
+                                      </svg>
                                     </a>
                                   ) : (
                                     <span className="text-muted" style={{ fontSize: '0.85rem' }}>
@@ -581,6 +594,18 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                     </span>
                                   )
                                 )}
+                                <button
+                                  className="btn-contract-close"
+                                  title="Cerrar contrato"
+                                  aria-label="Cerrar contrato"
+                                  onClick={() => handleClose(item)}
+                                >
+                                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="2" y="5" width="8" height="6" rx="1"/>
+                                    <path d="M4 5V4a2 2 0 0 1 4 0v1"/>
+                                  </svg>
+                                  Cerrar contrato
+                                </button>
                               </div>
                             </td>
                           </tr>

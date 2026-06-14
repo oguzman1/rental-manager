@@ -136,6 +136,7 @@ function PaymentAuditPage() {
   const [statementsError, setStatementsError] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [showStatementsList, setShowStatementsList] = useState(false)
+  const [parsingId, setParsingId] = useState(null)
   const fileInputRef = useRef(null)
 
   const visibleRows = onlyDifferences
@@ -193,6 +194,25 @@ function PaymentAuditPage() {
       await loadStatements()
     } catch (err) {
       setStatementsError(`Error al eliminar la cartola: ${err.message}`)
+    }
+  }
+
+  async function handleParseStatement(id) {
+    setParsingId(id)
+    setStatementsError(null)
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/statements/${id}/parse`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadStatements()
+    } catch (err) {
+      setStatementsError(`Error al parsear la cartola: ${err.message}`)
+    } finally {
+      setParsingId(null)
     }
   }
 
@@ -349,11 +369,22 @@ function PaymentAuditPage() {
                           <td className="td">{s.movements_count}</td>
                           <td className="td td-muted">{s.uploaded_at}</td>
                           <td className="td">
-                            {s.status === 'uploaded' && s.movements_count === 0 && (
-                              <button className="btn-payments" onClick={() => handleDeleteStatement(s.id)}>
-                                Eliminar
-                              </button>
-                            )}
+                            <div className="row-actions--wrap">
+                              {s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls') && (
+                                <button
+                                  className="btn-payments"
+                                  onClick={() => handleParseStatement(s.id)}
+                                  disabled={parsingId === s.id}
+                                >
+                                  {parsingId === s.id ? 'Parseando…' : 'Parsear'}
+                                </button>
+                              )}
+                              {s.status === 'uploaded' && s.movements_count === 0 && (
+                                <button className="btn-payments" onClick={() => handleDeleteStatement(s.id)}>
+                                  Eliminar
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}

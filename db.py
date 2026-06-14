@@ -2797,6 +2797,14 @@ def get_bank_movement(movement_id: int) -> dict | None:
     return _bank_movement_row_to_dict(row) if row else None
 
 
+def get_bank_movement_by_dedup_key(dedup_key: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM bank_movements WHERE dedup_key = ?", (dedup_key,)
+        ).fetchone()
+    return _bank_movement_row_to_dict(row) if row else None
+
+
 def list_bank_movements(statement_id: int | None = None) -> list[dict]:
     with get_connection() as conn:
         if statement_id is not None:

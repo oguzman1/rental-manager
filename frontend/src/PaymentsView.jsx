@@ -1061,11 +1061,6 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
                             {p.paid_amount != null
                               ? formatCLP(p.paid_amount)
                               : <span className="text-muted">—</span>}
-                            {p.deductions && p.deductions.length > 0 && (
-                              <span className="text-muted" style={{ fontSize: '0.75em', display: 'block' }}>
-                                Neto dueño: {formatCLP(p.net_owner_amount)}
-                              </span>
-                            )}
                           </td>
                           <td className="td td-mono td-muted">
                             {p.paid_at ?? <span className="text-muted">—</span>}

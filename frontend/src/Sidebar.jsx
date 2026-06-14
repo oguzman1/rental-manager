@@ -1,10 +1,20 @@
-const NAV_ITEMS = [
-  { id: 'dashboard',     label: 'Dashboard',          enabled: true },
-  { id: 'properties',    label: 'Propiedades',        enabled: true },
-  { id: 'contracts',     label: 'Contratos',          enabled: true },
-  { id: 'tenants',       label: 'Arrendatarios',      enabled: true },
-  { id: 'adjustments',   label: 'Reajustes',          enabled: true },
-  { id: 'payment-audit', label: 'Auditoría de pagos', enabled: true },
+const NAV_SECTIONS = [
+  {
+    label: 'Operación',
+    items: [
+      { id: 'dashboard',     label: 'Dashboard',          enabled: true },
+      { id: 'adjustments',   label: 'Reajustes',          enabled: true },
+      { id: 'payment-audit', label: 'Auditoría de pagos', enabled: true },
+    ],
+  },
+  {
+    label: 'Mantenedores',
+    items: [
+      { id: 'properties', label: 'Propiedades',   enabled: true },
+      { id: 'contracts',  label: 'Contratos',     enabled: true },
+      { id: 'tenants',    label: 'Arrendatarios', enabled: true },
+    ],
+  },
 ]
 
 function Sidebar({ active, onNav }) {
@@ -16,15 +26,20 @@ function Sidebar({ active, onNav }) {
       </div>
 
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => (
-          <button
-            key={item.id}
-            className={`sidebar-item${active === item.id ? ' active' : ''}`}
-            onClick={() => item.enabled && onNav(item.id)}
-            disabled={!item.enabled}
-          >
-            {item.label}
-          </button>
+        {NAV_SECTIONS.map((section) => (
+          <div className="sidebar-section" key={section.label}>
+            <div className="sidebar-section-label">{section.label}</div>
+            {section.items.map((item) => (
+              <button
+                key={item.id}
+                className={`sidebar-item${active === item.id ? ' active' : ''}`}
+                onClick={() => item.enabled && onNav(item.id)}
+                disabled={!item.enabled}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
 

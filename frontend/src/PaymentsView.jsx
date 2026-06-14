@@ -371,6 +371,11 @@ function PaymentsView({ contract, onBack, onPaymentMutation, targetPeriod, retur
     const validEntries = formEntries
       .filter(e => e.amount !== '' && parseAmountInput(e.amount) > 0)
       .map(e => ({ amount: parseAmountInput(e.amount), paid_at: e.paid_at || null, note: e.note || null }))
+    if (validEntries.length === 0) {
+      setFormError('Agrega al menos un abono con monto válido.')
+      setIsSubmitting(false)
+      return
+    }
     const totalEntered = validEntries.reduce((s, e) => s + e.amount, 0)
     const existing = payments.find(p => p.period === period)
 

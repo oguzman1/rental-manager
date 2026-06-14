@@ -870,6 +870,17 @@ def _iter_months(start_ym: str, end_ym: str):
             m, y = 1, y + 1
 
 
+def _period_horizon(today: date) -> str:
+    """Return the inclusive upper-bound month for period generation.
+
+    Always current month + 12 months: 2026-06 → 2027-06.
+    """
+    m_offset = today.month - 1 + 12
+    hy = today.year + m_offset // 12
+    hm = m_offset % 12 + 1
+    return f"{hy}-{hm:02d}"
+
+
 def _first_missing_period(start_ym: str, cap_ym: str, existing: set) -> str | None:
     """Return the earliest month in [start_ym, cap_ym] not present in existing, or None."""
     for ym in _iter_months(start_ym, cap_ym):

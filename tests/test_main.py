@@ -5086,3 +5086,43 @@ def test_patch_without_entries_does_not_clear_existing_entries():
     # Entries should be unchanged
     assert len(body["payment_entries"]) == 2
     assert body["paid_amount"] == 800000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Payment period generation horizon — _period_horizon, _ensure, cleanup
+# ──────────────────────────────────────────────────────────────────────────────
+
+import db as _db
+from datetime import date as _date
+
+
+def _expected_horizon_ym() -> str:
+    """Mirror of db._period_horizon for test assertions."""
+    today = _date.today()
+    m_offset = today.month - 1 + 12
+    hy = today.year + m_offset // 12
+    hm = m_offset % 12 + 1
+    return f"{hy}-{hm:02d}"
+
+
+def _today_ym() -> str:
+    return _date.today().strftime("%Y-%m")
+
+
+def test_period_horizon_current_month_plus_12():
+    """_period_horizon returns current month + 12 months."""
+    today = _date.today()
+    result = _db._period_horizon(today)
+    assert result == _expected_horizon_ym()
+
+
+def test_period_horizon_december():
+    """_period_horizon wraps correctly from December."""
+    result = _db._period_horizon(_date(2026, 12, 15))
+    assert result == "2027-12"
+
+
+def test_period_horizon_january():
+    """_period_horizon wraps correctly from January."""
+    result = _db._period_horizon(_date(2027, 1, 1))
+    assert result == "2028-01"

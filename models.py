@@ -434,3 +434,16 @@ class NoticeEventItem(BaseModel):
     event_at: date
     comment: str | None = None
     created_at: str
+
+
+class BankStatementResponse(BaseModel):
+    id: int
+    bank: str
+    original_filename: str
+    mime_type: str
+    size_bytes: int
+    period_label: str | None = None
+    status: str
+    movements_count: int
+    uploaded_at: str
+    parsed_at: str | None = None

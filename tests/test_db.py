@@ -1091,6 +1091,14 @@ def test_bank_statement_duplicate_file_hash_rejected():
         )
 
 
+def test_delete_bank_statement():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+
+    assert db.delete_bank_statement(sid) is True
+    assert db.get_bank_statement(sid) is None
+    assert db.delete_bank_statement(sid) is False
+
+
 def test_bank_movement_insert_get_list():
     sid = db.insert_bank_statement(_make_bank_statement_data())
     mid = db.insert_bank_movement(_make_bank_movement_data(sid))

@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
+
+const API_BASE = 'http://127.0.0.1:8000'
 
 const MONTH_BADGE_CLASS = {
   ok: 'badge-ok',
@@ -130,9 +132,72 @@ function PaymentAuditPage() {
   const [onlyDifferences, setOnlyDifferences] = useState(false)
   const [activeTab, setActiveTab] = useState('inconsistencias')
 
+  const [statements, setStatements] = useState([])
+  const [statementsError, setStatementsError] = useState(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [showStatementsList, setShowStatementsList] = useState(false)
+  const fileInputRef = useRef(null)
+
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
     : CONTRACT_ROWS
+
+  async function loadStatements() {
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/statements`)
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      setStatements(await res.json())
+      setStatementsError(null)
+    } catch (err) {
+      setStatementsError(`Error al cargar cartolas: ${err.message}`)
+    }
+  }
+
+  useEffect(() => {
+    loadStatements()
+  }, [])
+
+  async function handleUploadCartola(file) {
+    if (!file) return
+    setIsUploading(true)
+    setStatementsError(null)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch(`${API_BASE}/payment-audit/statements`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadStatements()
+    } catch (err) {
+      setStatementsError(`Error al subir la cartola: ${err.message}`)
+    } finally {
+      setIsUploading(false)
+    }
+  }
+
+  async function handleDeleteStatement(id) {
+    if (!window.confirm('¿Eliminar esta cartola? Esta acción no se puede deshacer.')) return
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/statements/${id}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadStatements()
+    } catch (err) {
+      setStatementsError(`Error al eliminar la cartola: ${err.message}`)
+    }
+  }
+
+  const totalMovements = statements.reduce((sum, s) => sum + (s.movements_count || 0), 0)
+  const latestStatements = statements.slice(0, 2)
 
   return (
     <>
@@ -153,25 +218,51 @@ function PaymentAuditPage() {
                   <div className="audit-step-title">Agregar cartola</div>
                 </div>
                 <p className="audit-col-text">
-                  Carga los PDF del Banco de Chile que servirán como respaldo.
+                  Carga la cartola del Banco de Chile que servirá como respaldo.
                 </p>
                 <div className="audit-chip-row">
-                  <span className="badge badge-ok">
-                    <span className="badge-dot" />
-                    ✓ Mayo 2026
-                  </span>
-                  <span className="badge badge-ok">
-                    <span className="badge-dot" />
-                    ✓ Junio 2026
-                  </span>
+                  {statements.length === 0 ? (
+                    <span className="badge badge-muted">
+                      <span className="badge-dot" />
+                      Sin cartolas cargadas
+                    </span>
+                  ) : (
+                    <>
+                      {latestStatements.map((s) => (
+                        <span className="badge badge-ok" key={s.id}>
+                          <span className="badge-dot" />
+                          {`✓ ${s.period_label ?? s.original_filename}`}
+                        </span>
+                      ))}
+                      <span className="badge badge-muted">
+                        <span className="badge-dot" />
+                        {`${statements.length} cartola${statements.length === 1 ? '' : 's'}`}
+                      </span>
+                    </>
+                  )}
                   <span className="badge badge-muted">
                     <span className="badge-dot" />
-                    143 movimientos
+                    {`${totalMovements} movimiento${totalMovements === 1 ? '' : 's'}`}
                   </span>
                 </div>
-                <button className="btn-secondary audit-step-btn">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xls,.pdf"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    e.target.value = ''
+                    handleUploadCartola(file)
+                  }}
+                />
+                <button
+                  className="btn-secondary audit-step-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                >
                   <span className="step-badge">1</span>
-                  Agregar cartola
+                  {isUploading ? 'Subiendo…' : 'Agregar cartola'}
                 </button>
               </div>
 
@@ -186,14 +277,17 @@ function PaymentAuditPage() {
                 <div className="audit-chip-row">
                   <span className="badge badge-muted">
                     <span className="badge-dot" />
-                    Banco de Chile
+                    {`${statements.length} cartola${statements.length === 1 ? '' : 's'} cargada${statements.length === 1 ? '' : 's'}`}
                   </span>
                   <span className="badge badge-muted">
                     <span className="badge-dot" />
-                    PDF reconocidos
+                    XLS/PDF
                   </span>
                 </div>
-                <button className="btn-ghost audit-step-btn">
+                <button
+                  className="btn-ghost audit-step-btn"
+                  onClick={() => setShowStatementsList((v) => !v)}
+                >
                   <span className="step-badge">2</span>
                   Ver cartolas
                 </button>
@@ -222,6 +316,52 @@ function PaymentAuditPage() {
                 </button>
               </div>
             </div>
+
+            {statementsError && <div className="payment-form-error">{statementsError}</div>}
+
+            {showStatementsList && (
+              <div className="table-wrapper">
+                {statements.length === 0 ? (
+                  <p className="audit-col-text">Sin cartolas cargadas todavía.</p>
+                ) : (
+                  <table className="dashboard-table">
+                    <thead>
+                      <tr>
+                        <th className="th">Archivo</th>
+                        <th className="th">Tipo</th>
+                        <th className="th">Estado</th>
+                        <th className="th">Movimientos</th>
+                        <th className="th">Cargado</th>
+                        <th className="th">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statements.map((s) => (
+                        <tr key={s.id}>
+                          <td className="td">{s.original_filename}</td>
+                          <td className="td td-muted">{s.mime_type}</td>
+                          <td className="td">
+                            <span className="badge badge-muted">
+                              <span className="badge-dot" />
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="td">{s.movements_count}</td>
+                          <td className="td td-muted">{s.uploaded_at}</td>
+                          <td className="td">
+                            {s.status === 'uploaded' && s.movements_count === 0 && (
+                              <button className="btn-payments" onClick={() => handleDeleteStatement(s.id)}>
+                                Eliminar
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="audit-section-header">

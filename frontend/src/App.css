@@ -1381,26 +1381,15 @@
   margin: 0 0 16px;
 }
 
-.audit-main-sub {
-  margin-top: 4px;
-  margin-bottom: 16px;
-}
-
-.audit-top-grid {
+.audit-steps-grid {
   display: grid;
-  grid-template-columns: 1.3fr 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
+  align-items: stretch;
 }
 
-@media (max-width: 760px) {
-  .audit-top-grid { grid-template-columns: 1fr; }
-}
-
-.audit-col-heading {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ink);
-  margin-bottom: 4px;
+@media (max-width: 880px) {
+  .audit-steps-grid { grid-template-columns: 1fr; }
 }
 
 .audit-col-text {
@@ -1425,20 +1414,33 @@
   margin-bottom: 0;
 }
 
-.audit-actions-card {
+.audit-step-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
-.audit-action-btn {
+.audit-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.audit-step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.audit-step-btn {
   width: 100%;
   justify-content: flex-start;
+  margin-top: auto;
 }
 
-/* The "neutral" action (btn-ghost) needs to read as a button alongside
-   the soft/secondary and primary actions in this vertical stack */
-.audit-actions-card .btn-ghost {
+/* The "neutral" step button (btn-ghost) needs to read as a button alongside
+   the soft/secondary and primary actions in this row of cards */
+.audit-step-card .btn-ghost {
   height: 32px;
   padding: 6px 12px;
   border: 1px solid var(--line);

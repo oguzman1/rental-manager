@@ -145,16 +145,15 @@ function PaymentAuditPage() {
 
           <div className="detail-card">
             <div className="detail-card-title">Auditoría con cartola Banco de Chile</div>
-            <div className="detail-card-sub audit-main-sub">
-              Primero se cargan cartolas, luego se auditan pagos. Nada se completa automáticamente.
-            </div>
 
-            <div className="audit-top-grid">
-              <div className="audit-col">
-                <div className="detail-card-label">Cartolas cargadas</div>
-                <div className="audit-col-heading">Banco de Chile</div>
+            <div className="audit-steps-grid">
+              <div className="detail-card detail-card--outlined audit-step-card">
+                <div className="audit-step-header">
+                  <span className="step-badge">1</span>
+                  <div className="audit-step-title">Agregar cartola</div>
+                </div>
                 <p className="audit-col-text">
-                  PDF usados como fuente de respaldo para revisar pagos esperados.
+                  Carga los PDF del Banco de Chile que servirán como respaldo.
                 </p>
                 <div className="audit-chip-row">
                   <span className="badge badge-ok">
@@ -170,10 +169,44 @@ function PaymentAuditPage() {
                     143 movimientos
                   </span>
                 </div>
+                <button className="btn-secondary audit-step-btn">
+                  <span className="step-badge">1</span>
+                  Agregar cartola
+                </button>
               </div>
 
-              <div className="audit-col">
-                <div className="detail-card-label">Período</div>
+              <div className="detail-card detail-card--outlined audit-step-card">
+                <div className="audit-step-header">
+                  <span className="step-badge">2</span>
+                  <div className="audit-step-title">Revisar cartolas</div>
+                </div>
+                <p className="audit-col-text">
+                  Valida qué cartolas están cargadas antes de auditar pagos.
+                </p>
+                <div className="audit-chip-row">
+                  <span className="badge badge-muted">
+                    <span className="badge-dot" />
+                    Banco de Chile
+                  </span>
+                  <span className="badge badge-muted">
+                    <span className="badge-dot" />
+                    PDF reconocidos
+                  </span>
+                </div>
+                <button className="btn-ghost audit-step-btn">
+                  <span className="step-badge">2</span>
+                  Ver cartolas
+                </button>
+              </div>
+
+              <div className="detail-card detail-card--outlined audit-step-card">
+                <div className="audit-step-header">
+                  <span className="step-badge">3</span>
+                  <div className="audit-step-title">Auditar pagos</div>
+                </div>
+                <p className="audit-col-text">
+                  Compara contratos, pagadores esperados y movimientos importados.
+                </p>
                 <select
                   className="payment-form-input audit-period-select"
                   value={period}
@@ -183,24 +216,10 @@ function PaymentAuditPage() {
                   <option value="12m">Últimos 12 meses</option>
                   <option value="2026">2026 completo</option>
                 </select>
-              </div>
-
-              <div className="audit-col">
-                <div className="detail-card detail-card--outlined audit-actions-card">
-                  <div className="detail-card-title">Acciones</div>
-                  <button className="btn-secondary audit-action-btn">
-                    <span className="step-badge">1</span>
-                    Agregar cartola
-                  </button>
-                  <button className="btn-ghost audit-action-btn">
-                    <span className="step-badge">2</span>
-                    Ver cartolas
-                  </button>
-                  <button className="btn-primary audit-action-btn">
-                    <span className="step-badge">3</span>
-                    Auditar pagos
-                  </button>
-                </div>
+                <button className="btn-primary audit-step-btn">
+                  <span className="step-badge">3</span>
+                  Auditar pagos
+                </button>
               </div>
             </div>
           </div>

@@ -793,6 +793,7 @@
 .btn-ghost {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   padding: 4px 8px;
   height: 28px;
   border-radius: 5px;
@@ -1433,6 +1434,14 @@
 .audit-action-btn {
   width: 100%;
   justify-content: flex-start;
+}
+
+/* The "neutral" action (btn-ghost) needs to read as a button alongside
+   the soft/secondary and primary actions in this vertical stack */
+.audit-actions-card .btn-ghost {
+  height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
 }
 
 .step-badge {

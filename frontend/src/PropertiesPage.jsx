@@ -16,11 +16,24 @@ const MONTHS_ES = {
   september: 'Septiembre', october: 'Octubre', november: 'Noviembre', december: 'Diciembre',
 }
 
+// Parking spaces are kept in inventory but clutter the main list — hide them
+// behind "Ver más" regardless of status.
+function isParkingLot(p) {
+  const text = `${p.property_label ?? ''} ${p.rol ?? ''} ${p.comuna ?? ''}`.toLowerCase()
+  return text.includes('estacionamiento') || text.includes('parking')
+}
+
+// Default-visible rows: rented/leased normal properties (not parking).
+function isCoreVisible(p) {
+  return p.status === 'occupied' && !isParkingLot(p)
+}
+
 function PropertiesPage({ onPropertySelect, onDataMutation }) {
   const [properties, setProperties] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchText, setSearchText] = useState('')
+  const [showHidden, setShowHidden] = useState(false)
 
   // null | { type: 'create' } | { type: 'edit', id }
   const [activeForm, setActiveForm] = useState(null)
@@ -217,6 +230,13 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
     )
   })
 
+  // While searching, show every match — don't apply the default-visibility
+  // grouping so the search can surface vacant/parking rows too.
+  const isSearching = searchText.trim().length > 0
+  const visibleRows = isSearching ? filtered : filtered.filter(isCoreVisible)
+  const hiddenRows = isSearching ? [] : filtered.filter((p) => !isCoreVisible(p))
+  const rows = showHidden ? [...visibleRows, ...hiddenRows] : visibleRows
+
   return (
     <>
       <Topbar
@@ -411,7 +431,7 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
                 </div>
               </div>
               <span className="filters-count">
-                {filtered.length} / {properties.length}
+                {rows.length} / {properties.length}
               </span>
             </div>
 
@@ -437,7 +457,7 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((p) => (
+                      {rows.map((p) => (
                         <tr
                           key={p.id}
                           className="table-row"
@@ -481,6 +501,14 @@ function PropertiesPage({ onPropertySelect, onDataMutation }) {
                   </table>
                   <div className="table-footer">
                     <span>{properties.length} propiedades</span>
+                    {!isSearching && hiddenRows.length > 0 && (
+                      <button
+                        className="btn-payments table-footer-action"
+                        onClick={() => setShowHidden((v) => !v)}
+                      >
+                        {showHidden ? 'Ver menos' : `Ver más propiedades (${hiddenRows.length})`}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

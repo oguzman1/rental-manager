@@ -441,17 +441,18 @@
   height: 28px;
   padding: 0;
   border-radius: 5px;
-  background: var(--danger-bg);
-  border: 1px solid var(--danger-fg);
-  color: var(--danger-fg);
+  background: color-mix(in oklch, var(--danger-bg) 45%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--danger-fg) 35%, var(--line));
+  color: color-mix(in oklch, var(--danger-fg) 65%, var(--ink-3));
   cursor: pointer;
   flex-shrink: 0;
   text-decoration: none;
 }
 
 .btn-icon-danger:hover {
-  background: var(--danger-fg);
-  color: var(--surface);
+  background: var(--danger-bg);
+  border-color: var(--danger-fg);
+  color: var(--danger-fg);
 }
 
 .btn-icon-danger svg {
@@ -478,6 +479,12 @@
   justify-content: space-between;
   align-items: center;
   font-family: var(--font-mono);
+}
+
+/* "Ver más / Ver menos" toggle in the table footer — readable UI font,
+   not the footer's monospace */
+.table-footer-action {
+  font-family: var(--font-ui);
 }
 
 /* ============================================================

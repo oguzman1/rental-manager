@@ -1,5 +1,6 @@
 from calendar import monthrange
 from datetime import date, datetime, timezone
+import hashlib
 import sqlite3
 import uuid
 from pathlib import Path
@@ -18,11 +19,14 @@ from db import (
     apply_overpayment_to_next_period,
     close_contract,
     create_contract,
+    delete_bank_statement,
     delete_managed_property,
     delete_payment,
     delete_rent_change,
     delete_tenant,
     dismiss_adjustment_alert,
+    get_bank_statement,
+    get_bank_statement_by_file_hash,
     get_contract,
     get_contract_for_payment,
     get_managed_property,
@@ -30,11 +34,14 @@ from db import (
     get_rent_change,
     get_tenant,
     init_db,
+    insert_bank_statement,
     insert_managed_property,
     insert_payment,
     insert_rent_change,
     insert_tenant,
     is_adjustment_alert_dismissed,
+    list_bank_movements,
+    list_bank_statements,
     list_contracts,
     list_dashboard_items,
     list_managed_properties,
@@ -56,6 +63,7 @@ from db import (
 from models import (
     AdjustmentFrequency,
     AdjustmentDismissResponse,
+    BankStatementResponse,
     ContractCloseRequest,
     ContractCreate,
     ContractDetailResponse,
@@ -115,6 +123,12 @@ _UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 _ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx"}
 _MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+_CARTOLAS_DIR = Path("uploads/cartolas")
+_CARTOLAS_DIR.mkdir(parents=True, exist_ok=True)
+
+_CARTOLA_ALLOWED_EXTENSIONS = {".pdf", ".xls"}
+_CARTOLA_MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 def _current_adjustment_state(
@@ -1272,4 +1286,111 @@ def delete_rent_change_endpoint(rent_change_id: int):
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    return Response(status_code=204)
+
+
+# --- Payment audit: bank statements -----------------------------------------
+
+
+@app.post(
+    "/payment-audit/statements",
+    tags=["payment-audit"],
+    summary="Upload a bank statement file (cartola)",
+    response_model=BankStatementResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Unsupported file type, empty file, or file too large"},
+    },
+)
+async def upload_bank_statement(file: UploadFile = File(...)):
+    original_filename = file.filename or ""
+    ext = Path(original_filename).suffix.lower()
+    if ext not in _CARTOLA_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: .pdf, .xls",
+        )
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="File is empty.")
+    if len(content) > _CARTOLA_MAX_FILE_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds maximum size of 20 MB.")
+
+    file_hash = hashlib.sha256(content).hexdigest()
+
+    existing = get_bank_statement_by_file_hash(file_hash)
+    if existing is not None:
+        return existing
+
+    mime = (file.content_type or "application/octet-stream").split(";")[0].strip()
+    safe_name = f"{uuid.uuid4().hex}{ext}"
+    dest = _CARTOLAS_DIR / safe_name
+    dest.write_bytes(content)
+
+    try:
+        statement_id = insert_bank_statement(
+            {
+                "original_filename": original_filename,
+                "stored_path": f"uploads/cartolas/{safe_name}",
+                "mime_type": mime,
+                "size_bytes": len(content),
+                "file_hash": file_hash,
+            }
+        )
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to save bank statement record.")
+
+    return get_bank_statement(statement_id)
+
+
+@app.get(
+    "/payment-audit/statements",
+    tags=["payment-audit"],
+    summary="List uploaded bank statements",
+    response_model=list[BankStatementResponse],
+)
+def list_bank_statements_endpoint():
+    return list_bank_statements()
+
+
+@app.delete(
+    "/payment-audit/statements/{statement_id}",
+    tags=["payment-audit"],
+    summary="Delete an uploaded bank statement",
+    status_code=204,
+    responses={
+        404: {"model": ErrorResponse, "description": "Statement not found"},
+        409: {"model": ErrorResponse, "description": "Statement is parsed or has associated movements"},
+    },
+)
+def delete_bank_statement_endpoint(statement_id: int):
+    statement = get_bank_statement(statement_id)
+    if statement is None:
+        raise HTTPException(status_code=404, detail="Bank statement not found.")
+
+    if statement["status"] != "uploaded":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a statement that has already been parsed.",
+        )
+
+    if statement["movements_count"] > 0 or list_bank_movements(statement_id=statement_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a statement with associated bank movements.",
+        )
+
+    delete_bank_statement(statement_id)
+
+    stored_path = statement.get("stored_path")
+    if stored_path:
+        file_path = Path(stored_path).resolve()
+        try:
+            file_path.relative_to(_CARTOLAS_DIR.resolve())
+        except ValueError:
+            file_path = None
+        if file_path is not None:
+            file_path.unlink(missing_ok=True)
+
     return Response(status_code=204)

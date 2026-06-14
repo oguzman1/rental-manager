@@ -2743,6 +2743,13 @@ def update_bank_statement_parse_result(
         conn.commit()
 
 
+def delete_bank_statement(statement_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM bank_statements WHERE id = ?", (statement_id,))
+        conn.commit()
+    return cursor.rowcount > 0
+
+
 # --- Payment audit: bank movements -------------------------------------------
 
 def _bank_movement_row_to_dict(row) -> dict:

@@ -5403,3 +5403,224 @@ def test_horizon_inactive_contract_no_new_future_periods():
     today_ym = _today_ym()
     new_future = {p for p in after - before if p >= today_ym}
     assert new_future == set(), f"Inactive contract must not get new future periods: {new_future}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Payment audit: bank statement upload/list/delete
+# ──────────────────────────────────────────────────────────────────────────────
+
+import main as _main
+
+_CARTOLA_UPLOAD_DIR = _Path("uploads/cartolas")
+
+
+def _cartola_upload_files():
+    if not _CARTOLA_UPLOAD_DIR.exists():
+        return []
+    return list(_CARTOLA_UPLOAD_DIR.iterdir())
+
+
+def _delete_statement_and_file(statement_id):
+    statement = _db.get_bank_statement(statement_id)
+    _db.delete_bank_statement(statement_id)
+    if statement and statement.get("stored_path"):
+        _Path(statement["stored_path"]).unlink(missing_ok=True)
+
+
+def test_upload_valid_pdf_statement():
+    pdf_bytes = b"%PDF-1.4 fake cartola pdf for upload test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_test_pdf.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["original_filename"] == "cartola_test_pdf.pdf"
+    assert data["mime_type"] == "application/pdf"
+    assert data["size_bytes"] == len(pdf_bytes)
+    assert data["status"] == "uploaded"
+    assert data["movements_count"] == 0
+    assert data["period_label"] is None
+    assert data["bank"] == "banco_de_chile"
+    assert "stored_path" not in data
+    assert "file_hash" not in data
+    assert "parse_error" not in data
+    assert len(_cartola_upload_files()) >= 1
+
+    _delete_statement_and_file(data["id"])
+
+
+def test_upload_valid_xls_statement():
+    xls_bytes = b"\xd0\xcf\x11\xe0fake cartola xls content for upload test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_test_xls.xls", io.BytesIO(xls_bytes), "application/vnd.ms-excel")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["original_filename"] == "cartola_test_xls.xls"
+    assert data["mime_type"] == "application/vnd.ms-excel"
+    assert data["size_bytes"] == len(xls_bytes)
+    assert data["status"] == "uploaded"
+
+    _delete_statement_and_file(data["id"])
+
+
+def test_upload_rejects_unsupported_extension():
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola.csv", io.BytesIO(b"a,b,c"), "text/csv")},
+    )
+    assert r.status_code == 400
+    assert "Unsupported" in r.json()["detail"]
+
+
+def test_upload_rejects_empty_file():
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_empty.pdf", io.BytesIO(b""), "application/pdf")},
+    )
+    assert r.status_code == 400
+    assert "empty" in r.json()["detail"].lower()
+
+
+def test_upload_rejects_oversized_file(monkeypatch):
+    monkeypatch.setattr(_main, "_CARTOLA_MAX_FILE_BYTES", 10)
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_big.pdf", io.BytesIO(b"x" * 20), "application/pdf")},
+    )
+    assert r.status_code == 400
+    assert "exceeds" in r.json()["detail"].lower()
+
+
+def test_upload_same_file_twice_returns_existing_statement():
+    content = b"%PDF-1.4 duplicate cartola content for dedup test"
+    r1 = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_dup_1.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    assert r1.status_code == 200
+    id1 = r1.json()["id"]
+    files_after_first = len(_cartola_upload_files())
+
+    r2 = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_dup_2.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    assert r2.status_code == 200
+    id2 = r2.json()["id"]
+
+    assert id1 == id2
+    assert r2.json()["original_filename"] == "cartola_dup_1.pdf"
+    assert len(_cartola_upload_files()) == files_after_first
+    assert len([s for s in client.get("/payment-audit/statements").json() if s["id"] == id1]) == 1
+
+    _delete_statement_and_file(id1)
+
+
+def test_list_bank_statements_returns_uploaded():
+    content = b"%PDF-1.4 list test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_list.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+
+    listed = client.get("/payment-audit/statements")
+    assert listed.status_code == 200
+    body = listed.json()
+    match = next((s for s in body if s["id"] == statement_id), None)
+    assert match is not None
+    assert match["original_filename"] == "cartola_list.pdf"
+    assert match["status"] == "uploaded"
+
+    _delete_statement_and_file(statement_id)
+
+
+def test_delete_uploaded_statement_succeeds():
+    content = b"%PDF-1.4 delete test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_delete.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+    assert len(_cartola_upload_files()) >= 1
+
+    del_r = client.delete(f"/payment-audit/statements/{statement_id}")
+    assert del_r.status_code == 204
+
+    assert _db.get_bank_statement(statement_id) is None
+    listed = client.get("/payment-audit/statements").json()
+    assert not any(s["id"] == statement_id for s in listed)
+
+
+def test_delete_nonexistent_statement_returns_404():
+    r = client.delete("/payment-audit/statements/999999")
+    assert r.status_code == 404
+
+
+def test_delete_parsed_statement_returns_409():
+    content = b"%PDF-1.4 parsed test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_parsed.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+
+    _db.update_bank_statement_parse_result(statement_id, status="parsed", movements_count=0)
+
+    del_r = client.delete(f"/payment-audit/statements/{statement_id}")
+    assert del_r.status_code == 409
+
+    _db.update_bank_statement_parse_result(statement_id, status="uploaded", movements_count=0)
+    _delete_statement_and_file(statement_id)
+
+
+def test_delete_statement_with_movements_returns_409():
+    content = b"%PDF-1.4 movements test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_movements.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+
+    movement_id = _db.insert_bank_movement(
+        {
+            "statement_id": statement_id,
+            "movement_date": "2026-06-05",
+            "description": "TEST MOVEMENT",
+            "amount": 1000,
+            "dedup_key": f"test-movement-{statement_id}",
+        }
+    )
+
+    del_r = client.delete(f"/payment-audit/statements/{statement_id}")
+    assert del_r.status_code == 409
+
+    with _db.get_connection() as conn:
+        conn.execute("DELETE FROM bank_movements WHERE id = ?", (movement_id,))
+        conn.commit()
+    _delete_statement_and_file(statement_id)
+
+
+def test_payment_audit_endpoints_do_not_touch_payments_or_payment_entries():
+    with _db.get_connection() as conn:
+        before_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        before_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    content = b"%PDF-1.4 no payment mutation test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_no_mutation.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+    client.get("/payment-audit/statements")
+    client.delete(f"/payment-audit/statements/{statement_id}")
+
+    with _db.get_connection() as conn:
+        after_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        after_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    assert after_payments == before_payments
+    assert after_entries == before_entries

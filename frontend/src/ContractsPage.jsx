@@ -548,52 +548,14 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               <div className="contract-actions">
                                 <button
                                   className="btn-icon"
-                                  title="Editar"
-                                  aria-label="Editar"
+                                  title="Editar parámetros contrato"
+                                  aria-label="Editar parámetros contrato"
                                   onClick={() => openEdit(item.id)}
                                 >
                                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                     <path d="M10 2L12 4L5 11H3V9L10 2Z"/>
                                   </svg>
                                 </button>
-                                {item.contract_document_path && (
-                                  <a
-                                    className="btn-icon"
-                                    href={`${API_BASE}/contracts/${item.id}/document`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    title="Ver contrato"
-                                    aria-label="Ver contrato"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M3 2H8L11 5V12H3V2Z"/>
-                                      <path d="M8 2V5H11"/>
-                                    </svg>
-                                  </a>
-                                )}
-                                {!item.contract_document_path && item.contract_document_url && (
-                                  /^(https?|file):\/\//i.test(item.contract_document_url) ? (
-                                    <a
-                                      className="btn-icon"
-                                      href={item.contract_document_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title="Abrir contrato"
-                                      aria-label="Abrir contrato"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M3 2H8L11 5V12H3V2Z"/>
-                                        <path d="M8 2V5H11"/>
-                                      </svg>
-                                    </a>
-                                  ) : (
-                                    <span className="text-muted" style={{ fontSize: '0.85rem' }}>
-                                      Documento registrado
-                                    </span>
-                                  )
-                                )}
                                 <button
                                   className="btn-icon-danger"
                                   title="Cerrar contrato"
@@ -605,6 +567,46 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                     <line x1="11" y1="3" x2="3" y2="11"/>
                                   </svg>
                                 </button>
+                                {item.contract_document_path && (
+                                  <a
+                                    className="btn-icon"
+                                    href={`${API_BASE}/contracts/${item.id}/document`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="Descargar contrato"
+                                    aria-label="Descargar contrato"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M7 2V8.5"/>
+                                      <path d="M4.5 6L7 8.5L9.5 6"/>
+                                      <path d="M2.5 11.5H11.5"/>
+                                    </svg>
+                                  </a>
+                                )}
+                                {!item.contract_document_path && item.contract_document_url && (
+                                  /^(https?|file):\/\//i.test(item.contract_document_url) ? (
+                                    <a
+                                      className="btn-icon"
+                                      href={item.contract_document_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title="Descargar contrato"
+                                      aria-label="Descargar contrato"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M7 2V8.5"/>
+                                        <path d="M4.5 6L7 8.5L9.5 6"/>
+                                        <path d="M2.5 11.5H11.5"/>
+                                      </svg>
+                                    </a>
+                                  ) : (
+                                    <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+                                      Documento registrado
+                                    </span>
+                                  )
+                                )}
                               </div>
                             </td>
                           </tr>

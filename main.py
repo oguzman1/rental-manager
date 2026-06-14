@@ -1028,6 +1028,7 @@ def create_payment(contract_id: int, data: PaymentCreate):
             status=status,
             deductions=deductions,
             owner_expenses=owner_expenses,
+            carry_forward_waived=data.carry_forward_waived,
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -1092,6 +1093,12 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
         if "expected_amount" in data.model_fields_set and data.expected_amount is not None
         else None
     )
+    # carry_forward_waived absent → no change; provided → replace
+    carry_forward_waived = (
+        data.carry_forward_waived
+        if "carry_forward_waived" in data.model_fields_set
+        else None
+    )
 
     # Use updated deductions list (or existing ones from DB) for recognized_amount status calc
     if deductions is not None:
@@ -1109,7 +1116,7 @@ def patch_payment(payment_id: int, data: PaymentUpdate):
     else:
         status = "partial"
 
-    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses, expected_amount=expected_amount)
+    update_payment(payment_id, paid_amount, paid_at, status, comment, deductions=deductions, owner_expenses=owner_expenses, expected_amount=expected_amount, carry_forward_waived=carry_forward_waived)
     return get_payment(payment_id)
 
 

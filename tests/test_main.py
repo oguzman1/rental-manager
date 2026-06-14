@@ -2580,6 +2580,40 @@ def test_overpayment_zero_when_exactly_paid():
     assert r.json()["overpayment"] == 0
 
 
+def test_payment_response_includes_carry_forward_waived_default_false():
+    cid = _setup_payment_property()
+    r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-10"})
+    assert r.status_code == 200
+    assert r.json()["carry_forward_waived"] is False
+
+
+def test_create_payment_with_carry_forward_waived_true():
+    cid = _setup_payment_property()
+    r = client.post(
+        f"/contracts/{cid}/payments",
+        json={"period": "2026-11", "paid_amount": 600000, "carry_forward_waived": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["carry_forward_waived"] is True
+
+
+def test_patch_payment_sets_carry_forward_waived():
+    cid = _setup_payment_property()
+    pid = client.post(f"/contracts/{cid}/payments", json={"period": "2026-12"}).json()["id"]
+
+    r = client.patch(
+        f"/payments/{pid}",
+        json={"paid_amount": 600000, "carry_forward_waived": True},
+    )
+    assert r.status_code == 200
+    assert r.json()["carry_forward_waived"] is True
+
+    # A later update that doesn't mention carry_forward_waived leaves it unchanged.
+    r = client.patch(f"/payments/{pid}", json={"comment": "nota"})
+    assert r.status_code == 200
+    assert r.json()["carry_forward_waived"] is True
+
+
 def test_apply_overpayment_endpoint_moves_excess_to_next():
     cid = _setup_payment_property()
     r = client.post(f"/contracts/{cid}/payments", json={"period": "2026-03"})

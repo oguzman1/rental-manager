@@ -798,6 +798,20 @@ def test_atomic_chronology_rejection_leaves_payment_unchanged():
     assert not any(rc["effective_from"] == "2028-04-01" for rc in rcs)
 
 
+def test_atomic_equal_period_to_latest_rent_change_rejects():
+    """period + '-01' == latest rent_change.effective_from must be rejected (not strictly after)."""
+    cid = _setup_atomic_payment_property()
+    client.post(f"/contracts/{cid}/rent-changes", json={"effective_from": "2028-05-01", "amount": 600000})
+    r = client.post(
+        f"/contracts/{cid}/rent-change-payment",
+        json={"period": "2028-05", "new_rent_amount": 620000, "paid_amount": 620000},
+    )
+    assert r.status_code == 400
+    assert "strictly after" in r.json()["detail"]
+    rcs = client.get(f"/contracts/{cid}/rent-changes").json()
+    assert not any(rc["effective_from"] == "2028-05-01" and rc["amount"] == 620000 for rc in rcs)
+
+
 def test_atomic_invalid_payment_id_rejects_and_no_rent_change():
     cid = _setup_atomic_payment_property()
     rcs_before = client.get(f"/contracts/{cid}/rent-changes").json()

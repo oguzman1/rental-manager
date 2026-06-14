@@ -45,7 +45,9 @@ function computePendingItems(properties) {
       currentStatus !== 'paid' &&
       p.actionable_payment_period !== currentPeriod
     ) {
-      const currentPaymentState = p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending'
+      const currentPaymentState = currentStatus === 'partial'
+        ? 'partial'
+        : (p.payment_day != null && todayDay > p.payment_day ? 'overdue' : 'pending')
       result.push({
         ...p,
         paymentState: currentPaymentState,

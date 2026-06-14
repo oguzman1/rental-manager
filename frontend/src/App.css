@@ -431,6 +431,32 @@
   flex-shrink: 0;
 }
 
+/* "Cerrar contrato" button in the contracts table: stays a real button
+   (visible border + background), never compresses or wraps */
+.btn-contract-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--danger-fg);
+  border-radius: 4px;
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-contract-close:hover {
+  background: var(--danger-fg);
+  color: var(--surface);
+}
+
+.btn-contract-close svg {
+  flex-shrink: 0;
+}
+
 .table-row { cursor: pointer; }
 
 .table-row:hover td { background: var(--surface-2); }

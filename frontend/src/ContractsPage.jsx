@@ -595,7 +595,7 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                   )
                                 )}
                                 <button
-                                  className="btn-payments-danger"
+                                  className="btn-contract-close"
                                   title="Cerrar contrato"
                                   aria-label="Cerrar contrato"
                                   onClick={() => handleClose(item)}

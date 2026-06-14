@@ -545,15 +545,26 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                               </button>
                             </td>
                             <td className="td" onClick={(e) => e.stopPropagation()}>
-                              <div className="contract-actions">
+                              <div className="row-actions">
                                 <button
                                   className="btn-icon"
-                                  title="Editar"
-                                  aria-label="Editar"
+                                  title="Editar parámetros contrato"
+                                  aria-label="Editar parámetros contrato"
                                   onClick={() => openEdit(item.id)}
                                 >
                                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                                     <path d="M10 2L12 4L5 11H3V9L10 2Z"/>
+                                  </svg>
+                                </button>
+                                <button
+                                  className="btn-icon-danger"
+                                  title="Cerrar contrato"
+                                  aria-label="Cerrar contrato"
+                                  onClick={() => handleClose(item)}
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="6" width="8" height="6" rx="1"/>
+                                    <path d="M5 6V4.5a2 2 0 0 1 4 0V6"/>
                                   </svg>
                                 </button>
                                 {item.contract_document_path && (
@@ -562,13 +573,14 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                     href={`${API_BASE}/contracts/${item.id}/document`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    title="Ver contrato"
-                                    aria-label="Ver contrato"
+                                    title="Descargar contrato"
+                                    aria-label="Descargar contrato"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M3 2H8L11 5V12H3V2Z"/>
-                                      <path d="M8 2V5H11"/>
+                                      <path d="M7 2V8.5"/>
+                                      <path d="M4.5 6L7 8.5L9.5 6"/>
+                                      <path d="M2.5 11.5H11.5"/>
                                     </svg>
                                   </a>
                                 )}
@@ -579,13 +591,14 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                       href={item.contract_document_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      title="Abrir contrato"
-                                      aria-label="Abrir contrato"
+                                      title="Descargar contrato"
+                                      aria-label="Descargar contrato"
                                       onClick={(e) => e.stopPropagation()}
                                     >
                                       <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M3 2H8L11 5V12H3V2Z"/>
-                                        <path d="M8 2V5H11"/>
+                                        <path d="M7 2V8.5"/>
+                                        <path d="M4.5 6L7 8.5L9.5 6"/>
+                                        <path d="M2.5 11.5H11.5"/>
                                       </svg>
                                     </a>
                                   ) : (
@@ -594,18 +607,6 @@ function ContractsPage({ onPropertySelect, onPaymentSelect, onDataMutation }) {
                                     </span>
                                   )
                                 )}
-                                <button
-                                  className="btn-contract-close"
-                                  title="Cerrar contrato"
-                                  aria-label="Cerrar contrato"
-                                  onClick={() => handleClose(item)}
-                                >
-                                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <rect x="2" y="5" width="8" height="6" rx="1"/>
-                                    <path d="M4 5V4a2 2 0 0 1 4 0v1"/>
-                                  </svg>
-                                  Cerrar contrato
-                                </button>
                               </div>
                             </td>
                           </tr>

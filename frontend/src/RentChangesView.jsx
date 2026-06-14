@@ -226,12 +226,22 @@ function RentChangesView({ contract, onBack, onDataMutation, autoOpenForm }) {
                       </td>
                       <td className="td">
                         {index === 0 && items.length > 1 && (
-                          <button
-                            className="btn-payments-danger"
-                            onClick={() => handleDelete(item.id)}
-                          >
-                            Eliminar
-                          </button>
+                          <div className="row-actions">
+                            <button
+                              className="btn-icon-danger"
+                              title="Eliminar reajuste"
+                              aria-label="Eliminar reajuste"
+                              onClick={() => handleDelete(item.id)}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M2.5 3.5H11.5"/>
+                                <path d="M5 3.5V2.5C5 2.1 5.3 1.8 5.7 1.8H8.3C8.7 1.8 9 2.1 9 2.5V3.5"/>
+                                <path d="M3.5 3.5L4 11.5C4 11.9 4.3 12.2 4.7 12.2H9.3C9.7 12.2 10 11.9 10 11.5L10.5 3.5"/>
+                                <path d="M6 6V10"/>
+                                <path d="M8 6V10"/>
+                              </svg>
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

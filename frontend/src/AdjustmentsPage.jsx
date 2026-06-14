@@ -227,16 +227,39 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                           />
                         </td>
                         <td className="td td-actions" onClick={(e) => e.stopPropagation()}>
-                          {!item.requires_adjustment_notice && !item.notice_registered ? (
-                            <button
-                              className="btn-payments"
-                              onClick={() => handleToggleHistory(item)}
-                            >
-                              Ver historial
-                            </button>
-                          ) : !item.notice_registered ? (
-                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                              {item.adjustment_due && (
+                          <div className="row-actions--wrap">
+                            {!item.requires_adjustment_notice && !item.notice_registered ? (
+                              <button
+                                className="btn-payments"
+                                onClick={() => handleToggleHistory(item)}
+                              >
+                                Ver historial
+                              </button>
+                            ) : !item.notice_registered ? (
+                              <>
+                                {item.adjustment_due && (
+                                  <button
+                                    className="btn-payments"
+                                    onClick={() => onRentChangeSelect?.({
+                                      ...item,
+                                      next_adjustment_date: item.due_adjustment_date ?? item.next_adjustment_date,
+                                    })}
+                                  >
+                                    Aplicar reajuste
+                                  </button>
+                                )}
+                                <button
+                                  className="btn-payments"
+                                  onClick={() => {
+                                    setFormItemId(item.id)
+                                    setFormComment('')
+                                  }}
+                                >
+                                  Registrar aviso
+                                </button>
+                              </>
+                            ) : (
+                              <>
                                 <button
                                   className="btn-payments"
                                   onClick={() => onRentChangeSelect?.({
@@ -246,58 +269,35 @@ function AdjustmentsPage({ onPropertySelect, onRentChangeSelect, onNoticeStateCh
                                 >
                                   Aplicar reajuste
                                 </button>
-                              )}
+                                <button
+                                  className="btn-payments"
+                                  disabled={revertingId === item.id}
+                                  onClick={() => handleRevert(item)}
+                                >
+                                  Anular aviso
+                                </button>
+                              </>
+                            )}
+                            {item.requires_adjustment_notice && !item.adjustment_resolved && !item.adjustment_dismissed && (
                               <button
                                 className="btn-payments"
-                                onClick={() => {
-                                  setFormItemId(item.id)
-                                  setFormComment('')
-                                }}
+                                disabled={dismissingId === item.id}
+                                onClick={() => handleDismissAlert(item)}
                               >
-                                Registrar aviso
+                                Anular alerta
                               </button>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            )}
+                            {(item.requires_adjustment_notice || item.notice_registered) && item.contract_id && (
                               <button
                                 className="btn-payments"
-                                onClick={() => onRentChangeSelect?.({
-                                  ...item,
-                                  next_adjustment_date: item.due_adjustment_date ?? item.next_adjustment_date,
-                                })}
+                                onClick={() => handleToggleHistory(item)}
                               >
-                                Aplicar reajuste
+                                {historyContractId === item.contract_id
+                                  ? 'Ocultar historial'
+                                  : 'Ver historial'}
                               </button>
-                              <button
-                                className="btn-payments"
-                                disabled={revertingId === item.id}
-                                onClick={() => handleRevert(item)}
-                              >
-                                Anular aviso
-                              </button>
-                            </div>
-                          )}
-                          {item.requires_adjustment_notice && !item.adjustment_resolved && !item.adjustment_dismissed && (
-                            <button
-                              className="btn-payments"
-                              disabled={dismissingId === item.id}
-                              style={{ marginTop: '6px' }}
-                              onClick={() => handleDismissAlert(item)}
-                            >
-                              Anular alerta
-                            </button>
-                          )}
-                          {(item.requires_adjustment_notice || item.notice_registered) && item.contract_id && (
-                            <button
-                              className="btn-payments"
-                              style={{ marginTop: '6px' }}
-                              onClick={() => handleToggleHistory(item)}
-                            >
-                              {historyContractId === item.contract_id
-                                ? 'Ocultar historial'
-                                : 'Ver historial'}
-                            </button>
-                          )}
+                            )}
+                          </div>
                         </td>
                       </tr>
 

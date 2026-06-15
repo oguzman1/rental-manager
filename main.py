@@ -49,6 +49,7 @@ from db import (
     complete_payment_from_audit_finding,
     list_payment_audit_findings,
     resolve_missing_payment_finding,
+    resolve_unmatched_movement_finding,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
@@ -1562,4 +1563,31 @@ def resolve_missing_payment_endpoint(finding_id: int, body: PaymentAuditResolveF
         return resolve_missing_payment_finding(finding_id, body.resolution_note)
     except ValueError as exc:
         status_code, detail = _RESOLVE_MISSING_ERRORS.get(str(exc), (409, str(exc)))
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
+_RESOLVE_UNMATCHED_ERRORS: dict[str, tuple[int, str]] = {
+    "not_found": (404, "Finding not found."),
+    "not_open": (409, "Finding is not open."),
+    "not_unmatched_movement": (400, "Only unmatched_movement findings can be resolved here."),
+    "note_required": (400, "resolution_note must not be blank."),
+}
+
+
+@app.post(
+    "/payment-audit/findings/{finding_id}/resolve-unmatched-movement",
+    tags=["payment-audit"],
+    summary="Resolve an unmatched_movement finding without payment mutation",
+    response_model=PaymentAuditFindingResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Wrong finding type or blank note"},
+        404: {"model": ErrorResponse, "description": "Finding not found"},
+        409: {"model": ErrorResponse, "description": "Finding is not open"},
+    },
+)
+def resolve_unmatched_movement_endpoint(finding_id: int, body: PaymentAuditResolveFindingRequest):
+    try:
+        return resolve_unmatched_movement_finding(finding_id, body.resolution_note)
+    except ValueError as exc:
+        status_code, detail = _RESOLVE_UNMATCHED_ERRORS.get(str(exc), (409, str(exc)))
         raise HTTPException(status_code=status_code, detail=detail)

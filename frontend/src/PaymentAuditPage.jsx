@@ -117,6 +117,7 @@ function PaymentAuditPage() {
   const [completingId, setCompletingId] = useState(null)
   const [resolvingFindingId, setResolvingFindingId] = useState(null)
   const [resolvingUnmatchedId, setResolvingUnmatchedId] = useState(null)
+  const [resolvingAmountMismatchId, setResolvingAmountMismatchId] = useState(null)
 
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
@@ -254,6 +255,32 @@ function PaymentAuditPage() {
       setFindingsError(`Error al marcar revisado: ${err.message}`)
     } finally {
       setResolvingUnmatchedId(null)
+    }
+  }
+
+  async function handleResolveAmountMismatch(finding) {
+    const note = window.prompt('Nota para resolver esta diferencia de monto:')
+    if (!note || !note.trim()) return
+    setResolvingAmountMismatchId(finding.id)
+    setFindingsError(null)
+    try {
+      const res = await fetch(
+        `${API_BASE}/payment-audit/findings/${finding.id}/resolve-amount-mismatch`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resolution_note: note.trim() }),
+        }
+      )
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadFindings()
+    } catch (err) {
+      setFindingsError(`Error al resolver diferencia: ${err.message}`)
+    } finally {
+      setResolvingAmountMismatchId(null)
     }
   }
 
@@ -669,6 +696,22 @@ function PaymentAuditPage() {
                             disabled={resolvingFindingId === f.id}
                           >
                             {resolvingFindingId === f.id ? 'Guardando…' : 'Marcar revisado'}
+                          </button>
+                        ) : (
+                          <span className="badge badge-ok">
+                            <span className="badge-dot" />
+                            Revisado
+                          </span>
+                        )
+                      )}
+                      {activeTab === 'inconsistencias' && f.finding_type === 'amount_mismatch' && (
+                        f.status === 'open' ? (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleResolveAmountMismatch(f)}
+                            disabled={resolvingAmountMismatchId === f.id}
+                          >
+                            {resolvingAmountMismatchId === f.id ? 'Guardando…' : 'Resolver diferencia'}
                           </button>
                         ) : (
                           <span className="badge badge-ok">

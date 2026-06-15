@@ -1,26 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
-import { formatCLP, formatMonthShort } from './utils'
+import { formatCLP, formatMonthShort, formatStatementPeriod } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
 const MONTH_STATUS_BADGE = {
   matched_registered: 'badge-ok',
   found_not_registered: 'badge-warn',
+  registered_not_found: 'badge-warn',
   missing: 'badge-danger',
 }
 
 const OVERALL_STATUS_BADGE = {
   matched_registered: 'badge-ok',
   found_not_registered: 'badge-warn',
+  registered_not_found: 'badge-warn',
   missing: 'badge-danger',
   no_data: 'badge-muted',
 }
 
-const OVERALL_STATUS_LABEL = {
-  matched_registered: 'Al día',
-  found_not_registered: 'Por confirmar',
-  missing: 'Pagos faltantes',
+const STATUS_LABEL = {
+  matched_registered: 'Conciliado',
+  found_not_registered: 'Cartola sin registro',
+  registered_not_found: 'Registro sin cartola',
+  missing: 'Sin pago',
   no_data: 'Sin datos',
 }
 
@@ -34,6 +37,12 @@ function findingTitle(f) {
   if (f.finding_type === 'amount_mismatch') return `${_contractLabel(f)} · ${f.period} · monto distinto`
   if (f.finding_type === 'unmatched_movement') return `${formatCLP(f.candidate_amount)} · movimiento sin contrato`
   return `Hallazgo #${f.id}`
+}
+
+function deriveAuditPeriodRange(movementsList) {
+  if (!movementsList || movementsList.length === 0) return null
+  const months = movementsList.map((m) => m.movement_date.slice(0, 7)).sort()
+  return { period_from: months[0], period_to: months[months.length - 1] }
 }
 
 function findingDescription(f) {
@@ -57,7 +66,6 @@ function PaymentAuditPage() {
   const [statements, setStatements] = useState([])
   const [statementsError, setStatementsError] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
-  const [parsingId, setParsingId] = useState(null)
   const fileInputRef = useRef(null)
 
   const [movements, setMovements] = useState([])
@@ -93,10 +101,13 @@ function PaymentAuditPage() {
     try {
       const res = await fetch(`${API_BASE}/payment-audit/movements`)
       if (!res.ok) throw new Error(`Error ${res.status}`)
-      setMovements(await res.json())
+      const data = await res.json()
+      setMovements(data)
       setMovementsError(null)
+      return data
     } catch (err) {
       setMovementsError(`Error al cargar movimientos: ${err.message}`)
+      return []
     } finally {
       setIsLoadingMovements(false)
     }
@@ -161,9 +172,7 @@ function PaymentAuditPage() {
       return
     }
 
-    const months = movements.map((m) => m.movement_date.slice(0, 7)).sort()
-    const period_from = months[0]
-    const period_to = months[months.length - 1]
+    const { period_from, period_to } = deriveAuditPeriodRange(movements)
 
     setIsRunningAudit(true)
     setFindingsError(null)
@@ -300,9 +309,11 @@ function PaymentAuditPage() {
 
   useEffect(() => {
     loadStatements()
-    loadMovements()
     loadFindings()
-    loadContractSummary()
+    loadMovements().then((data) => {
+      const range = deriveAuditPeriodRange(data)
+      loadContractSummary(range?.period_from, range?.period_to)
+    })
   }, [])
 
   useEffect(() => {
@@ -335,43 +346,6 @@ function PaymentAuditPage() {
     setIsUploading(false)
   }
 
-  async function handleDeleteStatement(id) {
-    if (!window.confirm('¿Eliminar esta cartola? Esta acción no se puede deshacer.')) return
-    try {
-      const res = await fetch(`${API_BASE}/payment-audit/statements/${id}`, {
-        method: 'DELETE',
-      })
-      if (!res.ok) {
-        const body = await res.json()
-        throw new Error(body.detail ?? `Error ${res.status}`)
-      }
-      await loadStatements()
-    } catch (err) {
-      setStatementsError(`Error al eliminar la cartola: ${err.message}`)
-    }
-  }
-
-  async function handleParseStatement(id) {
-    setParsingId(id)
-    setStatementsError(null)
-    try {
-      const res = await fetch(`${API_BASE}/payment-audit/statements/${id}/parse`, {
-        method: 'POST',
-      })
-      if (!res.ok) {
-        const body = await res.json()
-        throw new Error(body.detail ?? `Error ${res.status}`)
-      }
-      await loadStatements()
-      await loadMovements()
-    } catch (err) {
-      setStatementsError(`Error al parsear la cartola: ${err.message}`)
-    } finally {
-      setParsingId(null)
-    }
-  }
-
-  const totalMovements = statements.reduce((sum, s) => sum + (s.movements_count || 0), 0)
   const pendingCount = statements.filter(
     (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
   ).length
@@ -451,19 +425,13 @@ function PaymentAuditPage() {
                   {parsedCount > 0 && (
                     <span className="badge badge-ok">
                       <span className="badge-dot" />
-                      {`${parsedCount} procesada${parsedCount === 1 ? '' : 's'}`}
+                      {`${parsedCount} cartola${parsedCount === 1 ? '' : 's'} procesada${parsedCount === 1 ? '' : 's'}`}
                     </span>
                   )}
                   {statements.length === 0 && (
                     <span className="badge badge-muted">
                       <span className="badge-dot" />
                       Sin cartolas
-                    </span>
-                  )}
-                  {totalMovements > 0 && (
-                    <span className="badge badge-muted">
-                      <span className="badge-dot" />
-                      {`${totalMovements} movimiento${totalMovements === 1 ? '' : 's'}`}
                     </span>
                   )}
                 </div>
@@ -491,7 +459,7 @@ function PaymentAuditPage() {
                 <div className="audit-chip-row">
                   <span className="badge badge-muted">
                     <span className="badge-dot" />
-                    {`${movements.length} movimiento${movements.length === 1 ? '' : 's'} cargado${movements.length === 1 ? '' : 's'}`}
+                    {`${parsedCount} cartola${parsedCount === 1 ? '' : 's'} procesada${parsedCount === 1 ? '' : 's'}`}
                   </span>
                 </div>
                 <button
@@ -511,18 +479,17 @@ function PaymentAuditPage() {
                     <thead>
                       <tr>
                         <th className="th">Archivo</th>
-                        <th className="th">Tipo</th>
+                        <th className="th">Período</th>
                         <th className="th">Estado</th>
                         <th className="th">Movimientos</th>
                         <th className="th">Cargado</th>
-                        <th className="th">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
                       {statements.map((s) => (
                         <tr key={s.id}>
                           <td className="td">{s.original_filename}</td>
-                          <td className="td td-muted">{s.mime_type}</td>
+                          <td className="td td-muted">{formatStatementPeriod(s)}</td>
                           <td className="td">
                             <span className="badge badge-muted">
                               <span className="badge-dot" />
@@ -531,24 +498,6 @@ function PaymentAuditPage() {
                           </td>
                           <td className="td">{s.movements_count}</td>
                           <td className="td td-muted">{s.uploaded_at}</td>
-                          <td className="td">
-                            <div className="row-actions--wrap">
-                              {s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls') && (
-                                <button
-                                  className="btn-payments"
-                                  onClick={() => handleParseStatement(s.id)}
-                                  disabled={parsingId === s.id}
-                                >
-                                  {parsingId === s.id ? 'Parseando…' : 'Parsear'}
-                                </button>
-                              )}
-                              {s.status === 'uploaded' && s.movements_count === 0 && (
-                                <button className="btn-payments" onClick={() => handleDeleteStatement(s.id)}>
-                                  Eliminar
-                                </button>
-                              )}
-                            </div>
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -588,7 +537,11 @@ function PaymentAuditPage() {
                               </span>
                             ) : (
                               c.months.map((m) => (
-                                <span className={`badge ${MONTH_STATUS_BADGE[m.status]}`} key={m.period}>
+                                <span
+                                  className={`badge ${MONTH_STATUS_BADGE[m.status]}`}
+                                  key={m.period}
+                                  title={STATUS_LABEL[m.status]}
+                                >
                                   <span className="badge-dot" />
                                   {formatMonthShort(m.period)}
                                 </span>
@@ -599,7 +552,7 @@ function PaymentAuditPage() {
                         <td className="td">
                           <span className={`badge ${OVERALL_STATUS_BADGE[c.overall_status]}`}>
                             <span className="badge-dot" />
-                            {OVERALL_STATUS_LABEL[c.overall_status]}
+                            {STATUS_LABEL[c.overall_status]}
                           </span>
                         </td>
                       </tr>

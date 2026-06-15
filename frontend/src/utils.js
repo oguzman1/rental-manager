@@ -71,6 +71,18 @@ export function formatPeriodLabel(period) {
   return `${MONTHS_ES[month - 1]} ${year}`
 }
 
+const CARTOLA_FILENAME_PERIOD_RE = /^cartola_\d{2}(\d{2})(\d{4})\.xls$/i
+
+export function formatStatementPeriod(statement) {
+  if (statement?.period_label) return formatPeriodLabel(statement.period_label)
+  const match = statement?.original_filename?.match(CARTOLA_FILENAME_PERIOD_RE)
+  if (match) {
+    const [, month, year] = match
+    return formatPeriodLabel(`${year}-${month}`)
+  }
+  return '—'
+}
+
 const MONTHS_ES_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
 
 export function formatMonthShort(period) {

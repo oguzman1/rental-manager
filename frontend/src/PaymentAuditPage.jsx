@@ -4,60 +4,6 @@ import { formatCLP } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
-const MONTH_BADGE_CLASS = {
-  ok: 'badge-ok',
-  missing: 'badge-danger',
-  warning: 'badge-warn',
-}
-
-const CONTRACT_ROWS = [
-  {
-    id: 'depto-serena',
-    property: 'Depto Serena',
-    tenant: 'Nicolás Delgado',
-    payers: 'Nicolás Delgado, N Delgado',
-    months: [
-      { label: 'Mar', state: 'ok' },
-      { label: 'Abr', state: 'missing' },
-      { label: 'May', state: 'ok' },
-      { label: 'Jun', state: 'ok' },
-    ],
-    status: '1 mes sin respaldo',
-    statusVariant: 'badge-warn',
-    hasDifference: true,
-  },
-  {
-    id: 'depto-las-condes',
-    property: 'Depto Las Condes',
-    tenant: 'Camila Muñoz',
-    payers: 'Camila Muñoz, C Muñoz',
-    months: [
-      { label: 'Mar', state: 'ok' },
-      { label: 'Abr', state: 'ok' },
-      { label: 'May', state: 'ok' },
-      { label: 'Jun', state: 'missing' },
-    ],
-    status: 'Falta junio',
-    statusVariant: 'badge-danger',
-    hasDifference: true,
-  },
-  {
-    id: 'casa-chiloe',
-    property: 'Casa Chiloé',
-    tenant: 'Francisco Vera',
-    payers: 'Francisco Vera',
-    months: [
-      { label: 'Mar', state: 'ok' },
-      { label: 'Abr', state: 'ok' },
-      { label: 'May', state: 'warning' },
-      { label: 'Jun', state: 'ok' },
-    ],
-    status: 'Pago dudoso en mayo',
-    statusVariant: 'badge-warn',
-    hasDifference: true,
-  },
-]
-
 const TABS = [
   { id: 'inconsistencias', label: 'Inconsistencias' },
   { id: 'completar', label: 'Completar pagos' },
@@ -85,24 +31,15 @@ function findingDescription(f) {
   return ''
 }
 
-function MonthBadge({ label, state }) {
-  return (
-    <span className={`badge ${MONTH_BADGE_CLASS[state]}`}>
-      <span className="badge-dot" />
-      {label}
-    </span>
-  )
-}
-
 function PaymentAuditPage() {
-  const [period, setPeriod] = useState('12m')
-  const [onlyDifferences, setOnlyDifferences] = useState(false)
   const [activeTab, setActiveTab] = useState('inconsistencias')
+  const [showStatementsList, setShowStatementsList] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processResult, setProcessResult] = useState(null)
 
   const [statements, setStatements] = useState([])
   const [statementsError, setStatementsError] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
-  const [showStatementsList, setShowStatementsList] = useState(false)
   const [parsingId, setParsingId] = useState(null)
   const fileInputRef = useRef(null)
 
@@ -118,10 +55,6 @@ function PaymentAuditPage() {
   const [resolvingFindingId, setResolvingFindingId] = useState(null)
   const [resolvingUnmatchedId, setResolvingUnmatchedId] = useState(null)
   const [resolvingAmountMismatchId, setResolvingAmountMismatchId] = useState(null)
-
-  const visibleRows = onlyDifferences
-    ? CONTRACT_ROWS.filter((row) => row.hasDifference)
-    : CONTRACT_ROWS
 
   async function loadStatements() {
     try {
@@ -159,7 +92,47 @@ function PaymentAuditPage() {
     }
   }
 
+  async function handleProcessCartolas() {
+    const pending = statements.filter(
+      (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
+    )
+    const skipped = statements.filter((s) => s.status !== 'uploaded').length
+
+    if (pending.length === 0) {
+      setProcessResult({ processed: 0, skipped, errors: 0 })
+      return
+    }
+
+    setIsProcessing(true)
+    setStatementsError(null)
+    let processed = 0
+    let errors = 0
+
+    for (const s of pending) {
+      try {
+        const res = await fetch(`${API_BASE}/payment-audit/statements/${s.id}/parse`, { method: 'POST' })
+        if (res.ok) processed++
+        else errors++
+      } catch {
+        errors++
+      }
+    }
+
+    setProcessResult({ processed, skipped, errors })
+    await Promise.all([loadStatements(), loadMovements()])
+    setIsProcessing(false)
+  }
+
   async function handleRunAudit() {
+    if (movements.length === 0) {
+      setFindingsError('Primero procesa al menos una cartola con movimientos.')
+      return
+    }
+
+    const months = movements.map((m) => m.movement_date.slice(0, 7)).sort()
+    const period_from = months[0]
+    const period_to = months[months.length - 1]
+
     setIsRunningAudit(true)
     setFindingsError(null)
     setAuditResult(null)
@@ -167,7 +140,7 @@ function PaymentAuditPage() {
       const res = await fetch(`${API_BASE}/payment-audit/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ period_from, period_to }),
       })
       if (!res.ok) {
         const body = await res.json()
@@ -357,6 +330,10 @@ function PaymentAuditPage() {
 
   const totalMovements = statements.reduce((sum, s) => sum + (s.movements_count || 0), 0)
   const latestStatements = statements.slice(0, 2)
+  const pendingCount = statements.filter(
+    (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
+  ).length
+  const parsedCount = statements.filter((s) => s.status !== 'uploaded').length
 
   return (
     <>
@@ -420,7 +397,6 @@ function PaymentAuditPage() {
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploading}
                 >
-                  <span className="step-badge">1</span>
                   {isUploading ? 'Subiendo…' : 'Agregar cartola'}
                 </button>
               </div>
@@ -428,54 +404,72 @@ function PaymentAuditPage() {
               <div className="detail-card detail-card--outlined audit-step-card">
                 <div className="audit-step-header">
                   <span className="step-badge">2</span>
-                  <div className="audit-step-title">Revisar cartolas</div>
+                  <div className="audit-step-title">Procesar cartolas</div>
                 </div>
                 <p className="audit-col-text">
-                  Valida qué cartolas están cargadas antes de auditar pagos.
+                  Procesa las cartolas cargadas para extraer sus movimientos.
                 </p>
                 <div className="audit-chip-row">
-                  <span className="badge badge-muted">
-                    <span className="badge-dot" />
-                    {`${statements.length} cartola${statements.length === 1 ? '' : 's'} cargada${statements.length === 1 ? '' : 's'}`}
-                  </span>
-                  <span className="badge badge-muted">
-                    <span className="badge-dot" />
-                    XLS/PDF
-                  </span>
+                  {pendingCount > 0 && (
+                    <span className="badge badge-warn">
+                      <span className="badge-dot" />
+                      {`${pendingCount} pendiente${pendingCount === 1 ? '' : 's'}`}
+                    </span>
+                  )}
+                  {parsedCount > 0 && (
+                    <span className="badge badge-ok">
+                      <span className="badge-dot" />
+                      {`${parsedCount} procesada${parsedCount === 1 ? '' : 's'}`}
+                    </span>
+                  )}
+                  {statements.length === 0 && (
+                    <span className="badge badge-muted">
+                      <span className="badge-dot" />
+                      Sin cartolas
+                    </span>
+                  )}
                 </div>
                 <button
-                  className="btn-ghost audit-step-btn"
+                  className="btn-secondary audit-step-btn"
+                  onClick={handleProcessCartolas}
+                  disabled={isProcessing || statements.length === 0}
+                >
+                  {isProcessing ? 'Procesando…' : 'Procesar cartolas'}
+                </button>
+                {processResult && (
+                  <p className="audit-col-text">
+                    {`${processResult.processed} procesada${processResult.processed !== 1 ? 's' : ''} · ${processResult.skipped} ya estaban procesadas · ${processResult.errors} con error`}
+                  </p>
+                )}
+                <button
+                  className="btn-ghost"
+                  style={{ marginTop: '8px', fontSize: '0.8rem' }}
                   onClick={() => setShowStatementsList((v) => !v)}
                 >
-                  <span className="step-badge">2</span>
-                  Ver cartolas
+                  {showStatementsList ? 'Ocultar listado' : 'Ver listado de cartolas'}
                 </button>
               </div>
 
               <div className="detail-card detail-card--outlined audit-step-card">
                 <div className="audit-step-header">
                   <span className="step-badge">3</span>
-                  <div className="audit-step-title">Auditar pagos</div>
+                  <div className="audit-step-title">Auditar cartolas</div>
                 </div>
                 <p className="audit-col-text">
                   Compara contratos, pagadores esperados y movimientos importados.
                 </p>
-                <select
-                  className="payment-form-input audit-period-select"
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                >
-                  <option value="6m">Últimos 6 meses</option>
-                  <option value="12m">Últimos 12 meses</option>
-                  <option value="2026">2026 completo</option>
-                </select>
+                <div className="audit-chip-row">
+                  <span className="badge badge-muted">
+                    <span className="badge-dot" />
+                    {`${movements.length} movimiento${movements.length === 1 ? '' : 's'} cargado${movements.length === 1 ? '' : 's'}`}
+                  </span>
+                </div>
                 <button
                   className="btn-primary audit-step-btn"
                   onClick={handleRunAudit}
                   disabled={isRunningAudit}
                 >
-                  <span className="step-badge">3</span>
-                  {isRunningAudit ? 'Auditando…' : 'Auditar pagos'}
+                  {isRunningAudit ? 'Auditando…' : 'Auditar cartolas'}
                 </button>
                 {auditResult && (
                   <p className="audit-col-text">
@@ -543,58 +537,11 @@ function PaymentAuditPage() {
             )}
           </div>
 
-          <div className="audit-section-header">
-            <div>
-              <h2 className="audit-section-title">Resumen por contrato</h2>
-              <p className="audit-section-subtitle">Vista principal: contrato por contrato, mes por mes.</p>
-            </div>
-            <button
-              className={onlyDifferences ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => setOnlyDifferences((v) => !v)}
-            >
-              Ver solo diferencias
-            </button>
-          </div>
-
-          <div className="table-wrapper">
-            <table className="dashboard-table">
-              <thead>
-                <tr>
-                  <th className="th">Contrato</th>
-                  <th className="th">Pagadores esperados</th>
-                  <th className="th">Meses auditados</th>
-                  <th className="th">Estado</th>
-                  <th className="th">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row) => (
-                  <tr key={row.id}>
-                    <td className="td">
-                      {row.property}
-                      <div className="td-sub">{row.tenant}</div>
-                    </td>
-                    <td className="td td-muted">{row.payers}</td>
-                    <td className="td">
-                      <div className="audit-months">
-                        {row.months.map((month) => (
-                          <MonthBadge key={month.label} label={month.label} state={month.state} />
-                        ))}
-                      </div>
-                    </td>
-                    <td className="td">
-                      <span className={`badge ${row.statusVariant}`}>
-                        <span className="badge-dot" />
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="td">
-                      <button className="btn-payments">Resolver</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="detail-card">
+            <h2 className="audit-section-title">Resumen por contrato</h2>
+            <p className="audit-col-text">
+              Resumen por contrato estará disponible cuando conectemos este bloque a datos reales.
+            </p>
           </div>
 
           <div className="audit-section-header">

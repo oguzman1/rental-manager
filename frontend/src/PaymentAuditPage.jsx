@@ -422,10 +422,20 @@ function PaymentAuditPage() {
                 <button
                   className="btn-secondary audit-step-btn"
                   onClick={handleProcessCartolas}
-                  disabled={isProcessing || statements.length === 0}
+                  disabled={isProcessing || pendingCount === 0}
                 >
-                  {isProcessing ? 'Procesando…' : 'Procesar cartolas'}
+                  {isProcessing
+                    ? 'Procesando…'
+                    : pendingCount === 0 && statements.length > 0
+                    ? 'Sin cartolas pendientes'
+                    : 'Procesar cartolas'}
                 </button>
+                {statements.length === 0 && (
+                  <p className="audit-col-text">Agrega una o más cartolas para comenzar.</p>
+                )}
+                {statements.length > 0 && pendingCount === 0 && (
+                  <p className="audit-col-text">Todas las cartolas cargadas ya están procesadas.</p>
+                )}
               </div>
 
               <div className="detail-card detail-card--outlined audit-step-card">
@@ -445,10 +455,13 @@ function PaymentAuditPage() {
                 <button
                   className="btn-primary audit-step-btn"
                   onClick={handleRunAudit}
-                  disabled={isRunningAudit}
+                  disabled={isRunningAudit || movements.length === 0}
                 >
                   {isRunningAudit ? 'Auditando…' : 'Auditar cartolas'}
                 </button>
+                {movements.length === 0 && (
+                  <p className="audit-col-text">Primero procesa al menos una cartola con movimientos.</p>
+                )}
                 {auditResult && (
                   <p className="audit-col-text">
                     {`${auditResult.created} hallazgo${auditResult.created !== 1 ? 's' : ''} nuevo${auditResult.created !== 1 ? 's' : ''} · ${auditResult.skipped_duplicates} duplicado${auditResult.skipped_duplicates !== 1 ? 's' : ''} omitido${auditResult.skipped_duplicates !== 1 ? 's' : ''}`}

@@ -33,9 +33,7 @@ function findingDescription(f) {
 
 function PaymentAuditPage() {
   const [activeTab, setActiveTab] = useState('inconsistencias')
-  const [showStatementsList, setShowStatementsList] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [processResult, setProcessResult] = useState(null)
 
   const [statements, setStatements] = useState([])
   const [statementsError, setStatementsError] = useState(null)
@@ -96,29 +94,19 @@ function PaymentAuditPage() {
     const pending = statements.filter(
       (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
     )
-    const skipped = statements.filter((s) => s.status !== 'uploaded').length
-
-    if (pending.length === 0) {
-      setProcessResult({ processed: 0, skipped, errors: 0 })
-      return
-    }
+    if (pending.length === 0) return
 
     setIsProcessing(true)
     setStatementsError(null)
-    let processed = 0
-    let errors = 0
 
     for (const s of pending) {
       try {
-        const res = await fetch(`${API_BASE}/payment-audit/statements/${s.id}/parse`, { method: 'POST' })
-        if (res.ok) processed++
-        else errors++
+        await fetch(`${API_BASE}/payment-audit/statements/${s.id}/parse`, { method: 'POST' })
       } catch {
-        errors++
+        // continue on individual failure
       }
     }
 
-    setProcessResult({ processed, skipped, errors })
     await Promise.all([loadStatements(), loadMovements()])
     setIsProcessing(false)
   }
@@ -269,27 +257,28 @@ function PaymentAuditPage() {
     }
   }, [activeTab])
 
-  async function handleUploadCartola(file) {
-    if (!file) return
+  async function handleUploadCartolas(files) {
+    if (!files || files.length === 0) return
     setIsUploading(true)
     setStatementsError(null)
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await fetch(`${API_BASE}/payment-audit/statements`, {
-        method: 'POST',
-        body: formData,
-      })
-      if (!res.ok) {
-        const body = await res.json()
-        throw new Error(body.detail ?? `Error ${res.status}`)
+    for (const file of Array.from(files)) {
+      try {
+        const formData = new FormData()
+        formData.append('file', file)
+        const res = await fetch(`${API_BASE}/payment-audit/statements`, {
+          method: 'POST',
+          body: formData,
+        })
+        if (!res.ok) {
+          const body = await res.json()
+          setStatementsError(`Error al subir ${file.name}: ${body.detail ?? `Error ${res.status}`}`)
+        }
+      } catch (err) {
+        setStatementsError(`Error al subir ${file.name}: ${err.message}`)
       }
-      await loadStatements()
-    } catch (err) {
-      setStatementsError(`Error al subir la cartola: ${err.message}`)
-    } finally {
-      setIsUploading(false)
     }
+    await loadStatements()
+    setIsUploading(false)
   }
 
   async function handleDeleteStatement(id) {
@@ -385,11 +374,12 @@ function PaymentAuditPage() {
                   ref={fileInputRef}
                   type="file"
                   accept=".xls,.pdf"
+                  multiple
                   style={{ display: 'none' }}
                   onChange={(e) => {
-                    const file = e.target.files?.[0]
+                    const files = e.target.files
                     e.target.value = ''
-                    handleUploadCartola(file)
+                    handleUploadCartolas(files)
                   }}
                 />
                 <button
@@ -436,18 +426,6 @@ function PaymentAuditPage() {
                 >
                   {isProcessing ? 'Procesando…' : 'Procesar cartolas'}
                 </button>
-                {processResult && (
-                  <p className="audit-col-text">
-                    {`${processResult.processed} procesada${processResult.processed !== 1 ? 's' : ''} · ${processResult.skipped} ya estaban procesadas · ${processResult.errors} con error`}
-                  </p>
-                )}
-                <button
-                  className="btn-ghost"
-                  style={{ marginTop: '8px', fontSize: '0.8rem' }}
-                  onClick={() => setShowStatementsList((v) => !v)}
-                >
-                  {showStatementsList ? 'Ocultar listado' : 'Ver listado de cartolas'}
-                </button>
               </div>
 
               <div className="detail-card detail-card--outlined audit-step-card">
@@ -481,8 +459,7 @@ function PaymentAuditPage() {
 
             {statementsError && <div className="payment-form-error">{statementsError}</div>}
 
-            {showStatementsList && (
-              <div className="table-wrapper">
+            <div className="table-wrapper">
                 {statements.length === 0 ? (
                   <p className="audit-col-text">Sin cartolas cargadas todavía.</p>
                 ) : (
@@ -533,8 +510,7 @@ function PaymentAuditPage() {
                     </tbody>
                   </table>
                 )}
-              </div>
-            )}
+            </div>
           </div>
 
           <div className="detail-card">

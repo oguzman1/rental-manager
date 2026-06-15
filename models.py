@@ -475,6 +475,27 @@ class PaymentAuditRunResponse(BaseModel):
     summary: dict[str, int]
 
 
+class ContractAuditMonthStatus(BaseModel):
+    period: str
+    status: str
+    expected_amount: int
+    paid_amount: int
+
+
+class ContractAuditSummaryItem(BaseModel):
+    contract_id: int
+    property_label: str | None = None
+    tenant_name: str | None = None
+    overall_status: str
+    months: list[ContractAuditMonthStatus]
+
+
+class ContractAuditSummaryResponse(BaseModel):
+    period_from: str
+    period_to: str
+    contracts: list[ContractAuditSummaryItem]
+
+
 class PaymentAuditFindingResponse(BaseModel):
     id: int
     finding_type: str

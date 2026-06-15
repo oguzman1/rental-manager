@@ -15,6 +15,7 @@ from adjustments import (
     calculate_next_adjustment_date,
     months_between,
 )
+from bank_statement_parser import StatementParseError, parse_xls
 from db import (
     apply_overpayment_to_next_period,
     close_contract,
@@ -25,6 +26,7 @@ from db import (
     delete_rent_change,
     delete_tenant,
     dismiss_adjustment_alert,
+    get_bank_movement_by_dedup_key,
     get_bank_statement,
     get_bank_statement_by_file_hash,
     get_contract,
@@ -34,6 +36,7 @@ from db import (
     get_rent_change,
     get_tenant,
     init_db,
+    insert_bank_movement,
     insert_bank_statement,
     insert_managed_property,
     insert_payment,
@@ -54,6 +57,7 @@ from db import (
     rent_change_payment_atomic,
     revert_notice_sent,
     tenant_has_any_contract,
+    update_bank_statement_parse_result,
     update_contract,
     update_contract_document,
     update_managed_property,
@@ -1394,3 +1398,64 @@ def delete_bank_statement_endpoint(statement_id: int):
             file_path.unlink(missing_ok=True)
 
     return Response(status_code=204)
+
+
+@app.post(
+    "/payment-audit/statements/{statement_id}/parse",
+    tags=["payment-audit"],
+    summary="Parse an uploaded bank statement into movements",
+    response_model=BankStatementResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Statement file type cannot be parsed"},
+        404: {"model": ErrorResponse, "description": "Statement not found"},
+        409: {"model": ErrorResponse, "description": "Statement already has movements"},
+    },
+)
+def parse_bank_statement_endpoint(statement_id: int):
+    statement = get_bank_statement(statement_id)
+    if statement is None:
+        raise HTTPException(status_code=404, detail="Bank statement not found.")
+
+    ext = Path(statement["stored_path"]).suffix.lower()
+    if ext != ".xls":
+        raise HTTPException(
+            status_code=400,
+            detail="Only .xls statements can be parsed.",
+        )
+
+    if statement["movements_count"] > 0 or list_bank_movements(statement_id=statement_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Statement already has movements; re-parsing is not supported.",
+        )
+
+    parsed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    try:
+        content = Path(statement["stored_path"]).read_bytes()
+        movements = parse_xls(content)
+    except (StatementParseError, OSError) as exc:
+        update_bank_statement_parse_result(
+            statement_id,
+            status="error",
+            movements_count=0,
+            parse_error=str(exc),
+            parsed_at=parsed_at,
+        )
+        return get_bank_statement(statement_id)
+
+    inserted = 0
+    for movement in movements:
+        if get_bank_movement_by_dedup_key(movement["dedup_key"]) is not None:
+            continue
+        insert_bank_movement({**movement, "statement_id": statement_id})
+        inserted += 1
+
+    update_bank_statement_parse_result(
+        statement_id,
+        status="parsed",
+        movements_count=inserted,
+        parse_error=None,
+        parsed_at=parsed_at,
+    )
+    return get_bank_statement(statement_id)

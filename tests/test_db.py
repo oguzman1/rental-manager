@@ -1120,6 +1120,16 @@ def test_bank_movement_insert_get_list():
     assert db.list_bank_movements(statement_id=other_sid) == []
 
 
+def test_get_bank_movement_by_dedup_key():
+    sid = db.insert_bank_statement(_make_bank_statement_data())
+    mid = db.insert_bank_movement(_make_bank_movement_data(sid, dedup_key="dedup-lookup"))
+
+    found = db.get_bank_movement_by_dedup_key("dedup-lookup")
+    assert found["id"] == mid
+
+    assert db.get_bank_movement_by_dedup_key("does-not-exist") is None
+
+
 def test_bank_movement_duplicate_dedup_key_rejected():
     sid = db.insert_bank_statement(_make_bank_statement_data())
     db.insert_bank_movement(_make_bank_movement_data(sid, dedup_key="dup-movement"))

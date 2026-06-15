@@ -5624,3 +5624,166 @@ def test_payment_audit_endpoints_do_not_touch_payments_or_payment_entries():
 
     assert after_payments == before_payments
     assert after_entries == before_entries
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Payment audit: XLS parsing
+# ──────────────────────────────────────────────────────────────────────────────
+
+from bank_statement_parser import StatementParseError as _StatementParseError
+
+
+def _make_fake_parse_xls(suffix):
+    def _fake(content, bank="banco_de_chile"):
+        return [
+            {
+                "movement_date": "2026-02-05",
+                "description": "TEST ABONO ONE",
+                "amount": 100000,
+                "balance_after": 1000000,
+                "dedup_key": f"fake-dedup-1-{suffix}",
+            },
+            {
+                "movement_date": "2026-02-06",
+                "description": "TEST ABONO TWO",
+                "amount": 200000,
+                "balance_after": 1200000,
+                "dedup_key": f"fake-dedup-2-{suffix}",
+            },
+        ]
+
+    return _fake
+
+
+def _cleanup_movements_and_statement(statement_id):
+    with _db.get_connection() as conn:
+        conn.execute("DELETE FROM bank_movements WHERE statement_id = ?", (statement_id,))
+        conn.commit()
+    _delete_statement_and_file(statement_id)
+
+
+def test_parse_endpoint_rejects_missing_statement():
+    r = client.post("/payment-audit/statements/999999/parse")
+    assert r.status_code == 404
+
+
+def test_parse_endpoint_rejects_non_xls_statement():
+    content = b"%PDF-1.4 pdf statement for parse rejection test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_for_parse.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    statement_id = r.json()["id"]
+
+    parse_r = client.post(f"/payment-audit/statements/{statement_id}/parse")
+    assert parse_r.status_code == 400
+
+    _delete_statement_and_file(statement_id)
+
+
+def test_parse_endpoint_inserts_movements_and_updates_status(monkeypatch):
+    monkeypatch.setattr(_main, "parse_xls", _make_fake_parse_xls("insert"))
+
+    content = b"\xd0\xcf\x11\xe0fake xls bytes for parse test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_parse_ok.xls", io.BytesIO(content), "application/vnd.ms-excel")},
+    )
+    statement_id = r.json()["id"]
+
+    parse_r = client.post(f"/payment-audit/statements/{statement_id}/parse")
+    assert parse_r.status_code == 200
+    data = parse_r.json()
+    assert data["status"] == "parsed"
+    assert data["movements_count"] == 2
+    assert data["parsed_at"] is not None
+
+    movements = _db.list_bank_movements(statement_id=statement_id)
+    assert len(movements) == 2
+    assert {m["description"] for m in movements} == {"TEST ABONO ONE", "TEST ABONO TWO"}
+
+    _cleanup_movements_and_statement(statement_id)
+
+
+def test_parse_endpoint_blocks_reparse_when_movements_exist(monkeypatch):
+    monkeypatch.setattr(_main, "parse_xls", _make_fake_parse_xls("reparse"))
+
+    content = b"\xd0\xcf\x11\xe0fake xls bytes for reparse test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_reparse.xls", io.BytesIO(content), "application/vnd.ms-excel")},
+    )
+    statement_id = r.json()["id"]
+
+    first = client.post(f"/payment-audit/statements/{statement_id}/parse")
+    assert first.status_code == 200
+    assert first.json()["movements_count"] == 2
+
+    second = client.post(f"/payment-audit/statements/{statement_id}/parse")
+    assert second.status_code == 409
+
+    _cleanup_movements_and_statement(statement_id)
+
+
+def test_parse_endpoint_sets_error_status_on_parse_failure(monkeypatch):
+    def _fake_parse_xls_error(content, bank="banco_de_chile"):
+        raise _StatementParseError("synthetic parse failure")
+
+    monkeypatch.setattr(_main, "parse_xls", _fake_parse_xls_error)
+
+    content = b"\xd0\xcf\x11\xe0fake xls bytes for error test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_error.xls", io.BytesIO(content), "application/vnd.ms-excel")},
+    )
+    statement_id = r.json()["id"]
+
+    parse_r = client.post(f"/payment-audit/statements/{statement_id}/parse")
+    assert parse_r.status_code == 200
+    data = parse_r.json()
+    assert data["status"] == "error"
+    assert data["movements_count"] == 0
+
+    _delete_statement_and_file(statement_id)
+
+
+def test_parse_endpoint_does_not_mutate_payments_or_payment_entries(monkeypatch):
+    monkeypatch.setattr(_main, "parse_xls", _make_fake_parse_xls("nomut"))
+
+    with _db.get_connection() as conn:
+        before_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        before_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    content = b"\xd0\xcf\x11\xe0fake xls bytes for payment mutation test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_parse_no_mutation.xls", io.BytesIO(content), "application/vnd.ms-excel")},
+    )
+    statement_id = r.json()["id"]
+    client.post(f"/payment-audit/statements/{statement_id}/parse")
+
+    with _db.get_connection() as conn:
+        after_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        after_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    assert after_payments == before_payments
+    assert after_entries == before_entries
+
+    _cleanup_movements_and_statement(statement_id)
+
+
+def test_upload_list_delete_still_works_after_parser_addition():
+    content = b"%PDF-1.4 regression test cartola content"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_regression.pdf", io.BytesIO(content), "application/pdf")},
+    )
+    assert r.status_code == 200
+    statement_id = r.json()["id"]
+
+    listed = client.get("/payment-audit/statements").json()
+    assert any(s["id"] == statement_id for s in listed)
+
+    del_r = client.delete(f"/payment-audit/statements/{statement_id}")
+    assert del_r.status_code == 204
+    assert _db.get_bank_statement(statement_id) is None

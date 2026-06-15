@@ -4,17 +4,14 @@ import { formatCLP } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
-const TABS = [
-  { id: 'inconsistencias', label: 'Inconsistencias' },
-  { id: 'completar', label: 'Completar pagos' },
-  { id: 'no-encontrados', label: 'Pagos no encontrados' },
-  { id: 'movimientos', label: 'Movimientos cartola' },
-]
+function _contractLabel(f) {
+  return f.property_label ?? `Contrato #${f.contract_id}`
+}
 
 function findingTitle(f) {
-  if (f.finding_type === 'missing_payment') return `Contrato #${f.contract_id} · ${f.period} sin abono`
-  if (f.finding_type === 'match_found') return `${formatCLP(f.candidate_amount)} · ${f.period} · coincidencia ${f.confidence}`
-  if (f.finding_type === 'amount_mismatch') return `Contrato #${f.contract_id} · ${f.period} · monto distinto`
+  if (f.finding_type === 'missing_payment') return `${_contractLabel(f)} · ${f.period} sin abono`
+  if (f.finding_type === 'match_found') return `${formatCLP(f.candidate_amount)} · ${_contractLabel(f)} · ${f.period} · coincidencia ${f.confidence}`
+  if (f.finding_type === 'amount_mismatch') return `${_contractLabel(f)} · ${f.period} · monto distinto`
   if (f.finding_type === 'unmatched_movement') return `${formatCLP(f.candidate_amount)} · movimiento sin contrato`
   return `Hallazgo #${f.id}`
 }
@@ -22,8 +19,10 @@ function findingTitle(f) {
 function findingDescription(f) {
   if (f.finding_type === 'missing_payment')
     return `Pago esperado: ${formatCLP(f.expected_amount)}. Sin abono compatible encontrado en cartola.`
-  if (f.finding_type === 'match_found')
-    return `Movimiento #${f.bank_movement_id} coincide con contrato #${f.contract_id} período ${f.period}. Sin confirmar.`
+  if (f.finding_type === 'match_found') {
+    const who = [f.property_label, f.tenant_name].filter(Boolean).join(' · ') || `contrato #${f.contract_id}`
+    return `Movimiento #${f.bank_movement_id} coincide con ${who}, período ${f.period}. Sin confirmar.`
+  }
   if (f.finding_type === 'amount_mismatch')
     return `Se esperaba ${formatCLP(f.expected_amount)}, se encontró ${formatCLP(f.candidate_amount)} (movimiento #${f.bank_movement_id}).`
   if (f.finding_type === 'unmatched_movement')
@@ -83,10 +82,13 @@ function PaymentAuditPage() {
     try {
       const res = await fetch(`${API_BASE}/payment-audit/findings`)
       if (!res.ok) throw new Error(`Error ${res.status}`)
-      setFindings(await res.json())
+      const data = await res.json()
+      setFindings(data)
       setFindingsError(null)
+      return data
     } catch (err) {
       setFindingsError(`Error al cargar hallazgos: ${err.message}`)
+      return []
     }
   }
 
@@ -136,7 +138,15 @@ function PaymentAuditPage() {
       }
       const result = await res.json()
       setAuditResult(result)
-      await loadFindings()
+      const freshFindings = await loadFindings()
+      const hasInconsistencias = freshFindings.some(
+        (f) => f.finding_type === 'missing_payment' || f.finding_type === 'amount_mismatch'
+      )
+      const hasCompletar = freshFindings.some((f) => f.finding_type === 'match_found')
+      const hasNoEncontrados = freshFindings.some((f) => f.finding_type === 'unmatched_movement')
+      if (hasInconsistencias) setActiveTab('inconsistencias')
+      else if (hasCompletar) setActiveTab('completar')
+      else if (hasNoEncontrados) setActiveTab('no-encontrados')
     } catch (err) {
       setFindingsError(`Error al auditar: ${err.message}`)
     } finally {
@@ -323,16 +333,17 @@ function PaymentAuditPage() {
     (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
   ).length
   const parsedCount = statements.filter((s) => s.status !== 'uploaded').length
+  const inconsistenciasCount = findings.filter(
+    (f) => f.finding_type === 'missing_payment' || f.finding_type === 'amount_mismatch'
+  ).length
+  const completarCount = findings.filter((f) => f.finding_type === 'match_found').length
+  const noEncontradosCount = findings.filter((f) => f.finding_type === 'unmatched_movement').length
 
   return (
     <>
       <Topbar title="Auditoría de pagos" breadcrumb={['Auditoría de pagos']} />
       <div className="page-body">
         <div className="property-detail-scroll">
-          <p className="page-subtitle">
-            Una sola sección: eliges cartolas, auditas pagos y resuelves diferencias sin salir de esta pantalla.
-          </p>
-
           <div className="detail-card">
             <div className="detail-card-title">Auditoría con cartola Banco de Chile</div>
 
@@ -352,23 +363,13 @@ function PaymentAuditPage() {
                       Sin cartolas cargadas
                     </span>
                   ) : (
-                    <>
-                      {latestStatements.map((s) => (
-                        <span className="badge badge-ok" key={s.id}>
-                          <span className="badge-dot" />
-                          {`✓ ${s.period_label ?? s.original_filename}`}
-                        </span>
-                      ))}
-                      <span className="badge badge-muted">
+                    latestStatements.map((s) => (
+                      <span className="badge badge-ok" key={s.id}>
                         <span className="badge-dot" />
-                        {`${statements.length} cartola${statements.length === 1 ? '' : 's'}`}
+                        {`✓ ${s.period_label ?? s.original_filename}`}
                       </span>
-                    </>
+                    ))
                   )}
-                  <span className="badge badge-muted">
-                    <span className="badge-dot" />
-                    {`${totalMovements} movimiento${totalMovements === 1 ? '' : 's'}`}
-                  </span>
                 </div>
                 <input
                   ref={fileInputRef}
@@ -377,7 +378,7 @@ function PaymentAuditPage() {
                   multiple
                   style={{ display: 'none' }}
                   onChange={(e) => {
-                    const files = e.target.files
+                    const files = Array.from(e.target.files || [])
                     e.target.value = ''
                     handleUploadCartolas(files)
                   }}
@@ -418,6 +419,12 @@ function PaymentAuditPage() {
                       Sin cartolas
                     </span>
                   )}
+                  {totalMovements > 0 && (
+                    <span className="badge badge-muted">
+                      <span className="badge-dot" />
+                      {`${totalMovements} movimiento${totalMovements === 1 ? '' : 's'}`}
+                    </span>
+                  )}
                 </div>
                 <button
                   className="btn-secondary audit-step-btn"
@@ -430,12 +437,6 @@ function PaymentAuditPage() {
                     ? 'Sin cartolas pendientes'
                     : 'Procesar cartolas'}
                 </button>
-                {statements.length === 0 && (
-                  <p className="audit-col-text">Agrega una o más cartolas para comenzar.</p>
-                )}
-                {statements.length > 0 && pendingCount === 0 && (
-                  <p className="audit-col-text">Todas las cartolas cargadas ya están procesadas.</p>
-                )}
               </div>
 
               <div className="detail-card detail-card--outlined audit-step-card">
@@ -459,24 +460,13 @@ function PaymentAuditPage() {
                 >
                   {isRunningAudit ? 'Auditando…' : 'Auditar cartolas'}
                 </button>
-                {movements.length === 0 && (
-                  <p className="audit-col-text">Primero procesa al menos una cartola con movimientos.</p>
-                )}
-                {auditResult && (
-                  <p className="audit-col-text">
-                    {`${auditResult.created} hallazgo${auditResult.created !== 1 ? 's' : ''} nuevo${auditResult.created !== 1 ? 's' : ''} · ${auditResult.skipped_duplicates} duplicado${auditResult.skipped_duplicates !== 1 ? 's' : ''} omitido${auditResult.skipped_duplicates !== 1 ? 's' : ''}`}
-                  </p>
-                )}
               </div>
             </div>
 
             {statementsError && <div className="payment-form-error">{statementsError}</div>}
 
             <div className="table-wrapper">
-                {statements.length === 0 ? (
-                  <p className="audit-col-text">Sin cartolas cargadas todavía.</p>
-                ) : (
-                  <table className="dashboard-table">
+                <table className="dashboard-table">
                     <thead>
                       <tr>
                         <th className="th">Archivo</th>
@@ -521,8 +511,7 @@ function PaymentAuditPage() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
-                )}
+                </table>
             </div>
           </div>
 
@@ -543,13 +532,18 @@ function PaymentAuditPage() {
           </div>
 
           <div className="audit-tabs">
-            {TABS.map((tab) => (
+            {[
+              { id: 'inconsistencias', label: 'Inconsistencias', count: inconsistenciasCount },
+              { id: 'completar', label: 'Completar pagos', count: completarCount },
+              { id: 'no-encontrados', label: 'Pagos no encontrados', count: noEncontradosCount },
+              { id: 'movimientos', label: 'Movimientos cartola', count: movements.length },
+            ].map((tab) => (
               <button
                 key={tab.id}
                 className={`audit-tab${activeTab === tab.id ? ' active' : ''}`}
                 onClick={() => setActiveTab(tab.id)}
               >
-                {tab.label}
+                {tab.count > 0 ? `${tab.label} (${tab.count})` : tab.label}
               </button>
             ))}
           </div>
@@ -600,7 +594,14 @@ function PaymentAuditPage() {
                       ? findings.filter((f) => f.finding_type === 'match_found')
                       : findings.filter((f) => f.finding_type === 'unmatched_movement')
                   if (tabFindings.length === 0) {
-                    return <p className="audit-col-text">No hay hallazgos en esta categoría.</p>
+                    const totalFindings = inconsistenciasCount + completarCount + noEncontradosCount
+                    return (
+                      <p className="audit-col-text">
+                        {totalFindings > 0
+                          ? 'No hay hallazgos en esta categoría. Revisa los otros tabs.'
+                          : 'No hay hallazgos registrados.'}
+                      </p>
+                    )
                   }
                   return tabFindings.map((f) => (
                     <div className="detail-card audit-issue-card" key={f.id}>

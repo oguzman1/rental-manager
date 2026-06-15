@@ -6104,6 +6104,32 @@ def test_get_findings_filters_by_status():
     assert any(f["status"] == "dismissed" for f in r_dismissed.json())
 
 
+def test_get_findings_includes_property_and_tenant_labels():
+    """GET /payment-audit/findings must return property_label and tenant_name via JOIN."""
+    contract_id = _make_audit_contract("ARRENDATARIO ETIQUETA")
+    finding_id = _db.insert_payment_audit_finding({
+        "finding_type": "missing_payment",
+        "contract_id": contract_id,
+        "period": "2098-03",
+        "expected_amount": 600000,
+        "confidence": "high",
+    })
+
+    r = client.get("/payment-audit/findings")
+    assert r.status_code == 200
+    findings = r.json()
+    match = [f for f in findings if f["id"] == finding_id]
+    assert len(match) == 1
+    f = match[0]
+    assert "property_label" in f
+    assert "tenant_name" in f
+    assert f["tenant_name"] == "ARRENDATARIO ETIQUETA"
+
+    with _db.get_connection() as conn:
+        conn.execute("DELETE FROM payment_audit_findings WHERE id = ?", (finding_id,))
+        conn.commit()
+
+
 # --- Engine finding types -----------------------------------------------------
 
 
@@ -6145,7 +6171,81 @@ def test_run_audit_produces_match_found():
     _cleanup_engine_movement(statement_id, movement_id)
 
 
-def test_run_audit_produces_unmatched_movement():
+def test_run_audit_skips_already_paid_payment():
+    """A payment with status='paid' must not produce any finding, even with a matching movement."""
+    contract_id = _make_audit_contract("ARRENDATARIO YA PAGADO")
+    _insert_raw_payment(contract_id, "2099-12", paid_amount=600000, status="paid")
+    statement_id = _make_audit_statement("paid-skip")
+    movement_id = _make_audit_movement(
+        statement_id, "paid-skip", 600000,
+        "TRANSFERENCIA ARRENDATARIO YA PAGADO", "2099-12-05",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2099-12", "period_to": "2099-12"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings").json()
+    match = [
+        f for f in findings
+        if f.get("contract_id") == contract_id and f.get("period") == "2099-12"
+    ]
+    assert match == [], "Already-paid payment must not generate any finding"
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_run_audit_skips_already_paid_by_amount_even_if_status_not_paid():
+    """A payment fully covered by paid_amount must not produce match_found, even if status != 'paid'."""
+    contract_id = _make_audit_contract("ARRENDATARIO PAGADO POR MONTO")
+    _insert_raw_payment(contract_id, "2097-05", paid_amount=600000, status="pending")
+    statement_id = _make_audit_statement("paid-by-amount")
+    movement_id = _make_audit_movement(
+        statement_id, "paid-by-amount", 600000,
+        "TRANSFERENCIA ARRENDATARIO PAGADO POR MONTO", "2097-05-05",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2097-05", "period_to": "2097-05"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings").json()
+    match = [
+        f for f in findings
+        if f.get("contract_id") == contract_id and f.get("period") == "2097-05"
+    ]
+    assert match == [], "Payment covered by paid_amount must not generate a finding, even if status != 'paid'"
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_run_audit_produces_match_found_for_partial_payment():
+    """A payment with status='partial' and paid_amount < expected_amount can still produce match_found."""
+    contract_id = _make_audit_contract("ARRENDATARIO PAGO PARCIAL")
+    _insert_raw_payment(contract_id, "2097-06", paid_amount=300000, status="partial")
+    statement_id = _make_audit_statement("partial-match")
+    movement_id = _make_audit_movement(
+        statement_id, "partial-match", 600000,
+        "TRANSFERENCIA ARRENDATARIO PAGO PARCIAL", "2097-06-05",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2097-06", "period_to": "2097-06"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings", params={"finding_type": "match_found"}).json()
+    match = [f for f in findings if f["contract_id"] == contract_id and f["period"] == "2097-06"]
+    assert len(match) == 1, "Partial payment with a safe candidate must still produce match_found"
+    assert match[0]["confidence"] == "high"
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_run_audit_does_not_generate_unmatched_movement():
+    """Unmatched bank movements must NOT produce unmatched_movement findings."""
     statement_id = _make_audit_statement("unmatched-test")
     movement_id = _make_audit_movement(
         statement_id, "unmatched-test", 987654,
@@ -6155,9 +6255,9 @@ def test_run_audit_produces_unmatched_movement():
     r = client.post("/payment-audit/run", json={"period_from": "2099-10", "period_to": "2099-10"})
     assert r.status_code == 200
 
-    findings = client.get("/payment-audit/findings", params={"finding_type": "unmatched_movement"}).json()
-    match = [f for f in findings if f["bank_movement_id"] == movement_id]
-    assert len(match) == 1
+    findings = client.get("/payment-audit/findings").json()
+    match = [f for f in findings if f.get("bank_movement_id") == movement_id]
+    assert match == [], "Unmatched movements must not generate findings"
 
     _cleanup_engine_findings(movement_id=movement_id)
     _cleanup_engine_movement(statement_id, movement_id)

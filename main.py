@@ -67,6 +67,7 @@ from db import (
 from models import (
     AdjustmentFrequency,
     AdjustmentDismissResponse,
+    BankMovementResponse,
     BankStatementResponse,
     ContractCloseRequest,
     ContractCreate,
@@ -1459,3 +1460,13 @@ def parse_bank_statement_endpoint(statement_id: int):
         parsed_at=parsed_at,
     )
     return get_bank_statement(statement_id)
+
+
+@app.get(
+    "/payment-audit/movements",
+    tags=["payment-audit"],
+    summary="List parsed bank movements",
+    response_model=list[BankMovementResponse],
+)
+def list_bank_movements_endpoint(statement_id: int | None = None):
+    return list_bank_movements(statement_id=statement_id)

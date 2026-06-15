@@ -447,3 +447,14 @@ class BankStatementResponse(BaseModel):
     movements_count: int
     uploaded_at: str
     parsed_at: str | None = None
+
+
+class BankMovementResponse(BaseModel):
+    id: int
+    statement_id: int
+    movement_date: str
+    description: str
+    amount: int
+    balance_after: int | None = None
+    matched_payment_id: int | None = None
+    created_at: str

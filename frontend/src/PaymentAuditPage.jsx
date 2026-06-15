@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
+import { formatCLP } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
 
@@ -106,16 +107,6 @@ const TAB_ITEMS = {
       action: 'Marcar revisado',
     },
   ],
-  movimientos: [
-    {
-      title: 'Cartola Banco de Chile · Junio 2026',
-      description: '78 movimientos leídos · 0 duplicados nuevos · parser reconocido.',
-    },
-    {
-      title: 'Cartola Banco de Chile · Mayo 2026',
-      description: '65 movimientos leídos · 3 duplicados ignorados · parser reconocido.',
-    },
-  ],
 }
 
 function MonthBadge({ label, state }) {
@@ -139,6 +130,10 @@ function PaymentAuditPage() {
   const [parsingId, setParsingId] = useState(null)
   const fileInputRef = useRef(null)
 
+  const [movements, setMovements] = useState([])
+  const [movementsError, setMovementsError] = useState(null)
+  const [isLoadingMovements, setIsLoadingMovements] = useState(false)
+
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
     : CONTRACT_ROWS
@@ -154,9 +149,30 @@ function PaymentAuditPage() {
     }
   }
 
+  async function loadMovements() {
+    setIsLoadingMovements(true)
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/movements`)
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      setMovements(await res.json())
+      setMovementsError(null)
+    } catch (err) {
+      setMovementsError(`Error al cargar movimientos: ${err.message}`)
+    } finally {
+      setIsLoadingMovements(false)
+    }
+  }
+
   useEffect(() => {
     loadStatements()
+    loadMovements()
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'movimientos') {
+      loadMovements()
+    }
+  }, [activeTab])
 
   async function handleUploadCartola(file) {
     if (!file) return
@@ -209,6 +225,7 @@ function PaymentAuditPage() {
         throw new Error(body.detail ?? `Error ${res.status}`)
       }
       await loadStatements()
+      await loadMovements()
     } catch (err) {
       setStatementsError(`Error al parsear la cartola: ${err.message}`)
     } finally {
@@ -471,15 +488,51 @@ function PaymentAuditPage() {
           </div>
 
           <div className="audit-tab-content">
-            {TAB_ITEMS[activeTab].map((item) => (
-              <div className="detail-card audit-issue-card" key={item.title}>
-                <div>
-                  <div className="audit-issue-title">{item.title}</div>
-                  <p className="audit-issue-desc">{item.description}</p>
+            {activeTab === 'movimientos' ? (
+              <>
+                {movementsError && <div className="payment-form-error">{movementsError}</div>}
+                {isLoadingMovements ? (
+                  <p className="audit-col-text">Cargando movimientos…</p>
+                ) : movements.length === 0 ? (
+                  <p className="audit-col-text">No hay movimientos parseados todavía.</p>
+                ) : (
+                  <div className="table-wrapper">
+                    <table className="dashboard-table">
+                      <thead>
+                        <tr>
+                          <th className="th">Fecha</th>
+                          <th className="th">Descripción</th>
+                          <th className="th">Abono</th>
+                          <th className="th">Saldo</th>
+                          <th className="th">Cartola</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {movements.map((m) => (
+                          <tr key={m.id}>
+                            <td className="td td-muted">{m.movement_date}</td>
+                            <td className="td">{m.description}</td>
+                            <td className="td">{formatCLP(m.amount)}</td>
+                            <td className="td td-muted">{formatCLP(m.balance_after)}</td>
+                            <td className="td td-muted">#{m.statement_id}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              TAB_ITEMS[activeTab].map((item) => (
+                <div className="detail-card audit-issue-card" key={item.title}>
+                  <div>
+                    <div className="audit-issue-title">{item.title}</div>
+                    <p className="audit-issue-desc">{item.description}</p>
+                  </div>
+                  {item.action && <button className="btn-secondary">{item.action}</button>}
                 </div>
-                {item.action && <button className="btn-secondary">{item.action}</button>}
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

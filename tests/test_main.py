@@ -5787,3 +5787,104 @@ def test_upload_list_delete_still_works_after_parser_addition():
     del_r = client.delete(f"/payment-audit/statements/{statement_id}")
     assert del_r.status_code == 204
     assert _db.get_bank_statement(statement_id) is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Payment audit: list bank movements
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _insert_statement_for_movements(suffix):
+    return _db.insert_bank_statement(
+        {
+            "bank": "banco_de_chile",
+            "original_filename": f"cartola_movements_{suffix}.xls",
+            "stored_path": f"uploads/cartolas/movements_{suffix}.xls",
+            "mime_type": "application/vnd.ms-excel",
+            "size_bytes": 1234,
+            "file_hash": f"hash-movements-{suffix}",
+            "period_label": "2026-06",
+        }
+    )
+
+
+def _insert_movement(statement_id, suffix, **overrides):
+    data = {
+        "statement_id": statement_id,
+        "movement_date": "2026-06-05",
+        "description": "TRANSFERENCIA DE NICOLAS DELGADO",
+        "amount": 801875,
+        "balance_after": 5000000,
+        "dedup_key": f"dedup-movements-{suffix}",
+    }
+    data.update(overrides)
+    return _db.insert_bank_movement(data)
+
+
+def test_list_movements_returns_empty_list_initially():
+    r = client.get("/payment-audit/movements")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_list_movements_returns_inserted_movements():
+    statement_id = _insert_statement_for_movements("list")
+    _insert_movement(statement_id, "list-1")
+    _insert_movement(statement_id, "list-2", movement_date="2026-06-06", description="ABONO DOS", amount=200000)
+
+    r = client.get("/payment-audit/movements")
+    assert r.status_code == 200
+    data = r.json()
+    descriptions = {m["description"] for m in data}
+    assert {"TRANSFERENCIA DE NICOLAS DELGADO", "ABONO DOS"}.issubset(descriptions)
+
+    _cleanup_movements_and_statement(statement_id)
+
+
+def test_list_movements_filters_by_statement_id():
+    statement_a = _insert_statement_for_movements("filter-a")
+    statement_b = _insert_statement_for_movements("filter-b")
+    _insert_movement(statement_a, "filter-a")
+    _insert_movement(statement_b, "filter-b")
+
+    r = client.get("/payment-audit/movements", params={"statement_id": statement_a})
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["statement_id"] == statement_a
+
+    _cleanup_movements_and_statement(statement_a)
+    _cleanup_movements_and_statement(statement_b)
+
+
+def test_list_movements_does_not_expose_dedup_key():
+    statement_id = _insert_statement_for_movements("dedup")
+    _insert_movement(statement_id, "dedup")
+
+    r = client.get("/payment-audit/movements", params={"statement_id": statement_id})
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert "dedup_key" not in data[0]
+
+    _cleanup_movements_and_statement(statement_id)
+
+
+def test_list_movements_endpoint_does_not_mutate_payments_or_payment_entries():
+    statement_id = _insert_statement_for_movements("nomut")
+    _insert_movement(statement_id, "nomut")
+
+    with _db.get_connection() as conn:
+        before_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        before_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.get("/payment-audit/movements")
+    assert r.status_code == 200
+
+    with _db.get_connection() as conn:
+        after_payments = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+        after_entries = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    assert after_payments == before_payments
+    assert after_entries == before_entries
+
+    _cleanup_movements_and_statement(statement_id)

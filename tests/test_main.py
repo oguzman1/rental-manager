@@ -6206,3 +6206,461 @@ def test_upload_parse_does_not_create_findings(monkeypatch):
     assert after == before
 
     _cleanup_movements_and_statement(statement_id)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /payment-audit/findings/{finding_id}/complete-payment
+# ──────────────────────────────────────────────────────────────────────────────
+
+_complete_seq = 0
+
+
+def _make_complete_contract(tenant_name: str) -> int:
+    """Create an active contract for complete-payment tests. ROL prefix 98001-."""
+    global _complete_seq
+    _complete_seq += 1
+    rol = f"98001-{_complete_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "COMPLETE",
+                "rol": rol,
+                "address": f"Complete Calle {_complete_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": tenant_name})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "current_rent": 600000,
+        },
+    )
+    assert r.status_code == 200, r.json()
+    return r.json()["id"]
+
+
+def _make_complete_statement(suffix: str) -> int:
+    return _db.insert_bank_statement(
+        {
+            "bank": "banco_de_chile",
+            "original_filename": f"complete_test_{suffix}.xls",
+            "stored_path": f"uploads/cartolas/complete_test_{suffix}.xls",
+            "mime_type": "application/vnd.ms-excel",
+            "size_bytes": 100,
+            "file_hash": f"hash-complete-test-{suffix}",
+            "period_label": "2098-01",
+        }
+    )
+
+
+def _make_complete_movement(
+    statement_id: int, suffix: str, amount: int, description: str, movement_date: str
+) -> int:
+    return _db.insert_bank_movement(
+        {
+            "statement_id": statement_id,
+            "movement_date": movement_date,
+            "description": description,
+            "amount": amount,
+            "balance_after": 5000000,
+            "dedup_key": f"dedup-complete-test-{suffix}",
+        }
+    )
+
+
+def _make_complete_finding(
+    contract_id: int,
+    period: str,
+    movement_id: int,
+    expected_amount: int = 600000,
+    candidate_amount: int = 600000,
+    finding_type: str = "match_found",
+    status: str = "open",
+) -> int:
+    return _db.insert_payment_audit_finding(
+        {
+            "finding_type": finding_type,
+            "contract_id": contract_id,
+            "period": period,
+            "bank_movement_id": movement_id,
+            "expected_amount": expected_amount,
+            "candidate_amount": candidate_amount,
+            "confidence": "high",
+            "status": status,
+        }
+    )
+
+
+def _get_payment_id(contract_id: int, period: str) -> int | None:
+    with _db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, period),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _set_movement_matched(movement_id: int, payment_id: int):
+    with _db.get_connection() as conn:
+        conn.execute(
+            "UPDATE bank_movements SET matched_payment_id = ? WHERE id = ?",
+            (payment_id, movement_id),
+        )
+        conn.commit()
+
+
+def _cleanup_complete(
+    *,
+    contract_id: int | None = None,
+    movement_id: int | None = None,
+    statement_id: int | None = None,
+    finding_id: int | None = None,
+):
+    with _db.get_connection() as conn:
+        if finding_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE id = ?", (finding_id,))
+        if contract_id is not None:
+            conn.execute(
+                "DELETE FROM payment_entries WHERE payment_id IN (SELECT id FROM payments WHERE contract_id = ?)",
+                (contract_id,),
+            )
+            conn.execute("DELETE FROM payments WHERE contract_id = ?", (contract_id,))
+        if movement_id is not None:
+            conn.execute("DELETE FROM bank_movements WHERE id = ?", (movement_id,))
+        conn.commit()
+    if statement_id is not None:
+        _delete_statement_and_file(statement_id)
+
+
+def test_complete_payment_creates_one_payment_entry():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE UNO")
+    period = "2098-01"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("uno")
+    movement_id = _make_complete_movement(
+        statement_id, "uno", 600000, "TRANSFERENCIA INQUILINO COMPLETE UNO", "2098-01-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before + 1
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_updates_paid_amount_and_status_to_paid():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE DOS")
+    period = "2098-02"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("dos")
+    movement_id = _make_complete_movement(
+        statement_id, "dos", 600000, "TRANSFERENCIA INQUILINO COMPLETE DOS", "2098-02-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+
+    with _db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, period),
+        ).fetchone()
+    assert row[0] == 600000
+    assert row[1] == "paid"
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_resolves_finding():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE TRES")
+    period = "2098-03"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("tres")
+    movement_id = _make_complete_movement(
+        statement_id, "tres", 600000, "TRANSFERENCIA INQUILINO COMPLETE TRES", "2098-03-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "resolved"
+    assert finding["resolution_note"] is not None
+    assert finding["resolved_at"] is not None
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_marks_movement_as_matched():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE CUATRO")
+    period = "2098-04"
+    _insert_raw_payment(contract_id, period, status="pending")
+    payment_id = _get_payment_id(contract_id, period)
+    statement_id = _make_complete_statement("cuatro")
+    movement_id = _make_complete_movement(
+        statement_id, "cuatro", 600000, "TRANSFERENCIA INQUILINO COMPLETE CUATRO", "2098-04-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+
+    movement = _db.get_bank_movement(movement_id)
+    assert movement["matched_payment_id"] == payment_id
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_second_call_returns_409_no_duplicate_entry():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE CINCO")
+    period = "2098-05"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("cinco")
+    movement_id = _make_complete_movement(
+        statement_id, "cinco", 600000, "TRANSFERENCIA INQUILINO COMPLETE CINCO", "2098-05-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    r1 = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r1.status_code == 200
+
+    with _db.get_connection() as conn:
+        count_after_first = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r2 = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r2.status_code == 409
+
+    with _db.get_connection() as conn:
+        count_after_second = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert count_after_second == count_after_first
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_rejects_non_match_found_finding():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE SEIS")
+    period = "2098-06"
+    _insert_raw_payment(contract_id, period, status="pending")
+    finding_id = _make_complete_finding(
+        contract_id, period, 999000001, finding_type="missing_payment"
+    )
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 400
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_complete(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_complete_payment_rejects_resolved_finding():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE SIETE")
+    period = "2098-07"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("siete")
+    movement_id = _make_complete_movement(
+        statement_id, "siete", 600000, "TRANSFERENCIA INQUILINO COMPLETE SIETE", "2098-07-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id, status="resolved")
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 409
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_missing_movement_returns_409():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE OCHO")
+    period = "2098-08"
+    _insert_raw_payment(contract_id, period, status="pending")
+    finding_id = _make_complete_finding(contract_id, period, 999000002)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 409
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_complete(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_complete_payment_already_matched_movement_returns_409():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE NUEVE")
+    period = "2098-09"
+    _insert_raw_payment(contract_id, period, status="pending")
+    payment_id = _get_payment_id(contract_id, period)
+    statement_id = _make_complete_statement("nueve")
+    movement_id = _make_complete_movement(
+        statement_id, "nueve", 600000, "TRANSFERENCIA INQUILINO COMPLETE NUEVE", "2098-09-05"
+    )
+    _set_movement_matched(movement_id, payment_id)
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 409
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_amount_exceeds_remaining_returns_409():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE DIEZ")
+    period = "2098-10"
+    _insert_raw_payment(contract_id, period, paid_amount=500000, status="partial")
+    statement_id = _make_complete_statement("diez")
+    movement_id = _make_complete_movement(
+        statement_id, "diez", 300000, "TRANSFERENCIA INQUILINO COMPLETE DIEZ", "2098-10-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id, candidate_amount=300000)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 409
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_complete_payment_partial_amount_sets_partial_status():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE ONCE")
+    period = "2098-11"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("once")
+    movement_id = _make_complete_movement(
+        statement_id, "once", 300000, "TRANSFERENCIA INQUILINO COMPLETE ONCE", "2098-11-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id, candidate_amount=300000)
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+
+    with _db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, period),
+        ).fetchone()
+    assert row[0] == 300000
+    assert row[1] == "partial"
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )
+
+
+def test_run_audit_does_not_write_payment_entries():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE DOCE")
+    period = "2098-12"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("doce")
+    movement_id = _make_complete_movement(
+        statement_id, "doce", 600000, "TRANSFERENCIA INQUILINO COMPLETE DOCE", "2098-12-05"
+    )
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    client.post("/payment-audit/run", json={"period_from": "2098-12", "period_to": "2098-12"})
+    client.post("/payment-audit/run", json={"period_from": "2098-12", "period_to": "2098-12"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_complete(contract_id=contract_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_complete_payment_returns_required_response_fields():
+    contract_id = _make_complete_contract("INQUILINO COMPLETE TRECE")
+    period = "2097-01"
+    _insert_raw_payment(contract_id, period, status="pending")
+    statement_id = _make_complete_statement("trece")
+    movement_id = _make_complete_movement(
+        statement_id, "trece", 600000, "TRANSFERENCIA INQUILINO COMPLETE TRECE", "2097-01-05"
+    )
+    finding_id = _make_complete_finding(contract_id, period, movement_id)
+
+    r = client.post(f"/payment-audit/findings/{finding_id}/complete-payment")
+    assert r.status_code == 200
+    data = r.json()
+    assert "finding_id" in data
+    assert "payment_id" in data
+    assert "payment_entry_id" in data
+    assert "amount" in data
+    assert "status" in data
+    assert "resolution_note" in data
+    assert data["finding_id"] == finding_id
+    assert data["amount"] == 600000
+
+    _cleanup_complete(
+        contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
+    )

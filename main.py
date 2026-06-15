@@ -46,6 +46,7 @@ from db import (
     list_bank_movements,
     list_bank_statements,
     list_contracts,
+    complete_payment_from_audit_finding,
     list_payment_audit_findings,
     list_dashboard_items,
     list_managed_properties,
@@ -71,6 +72,7 @@ from models import (
     AdjustmentDismissResponse,
     BankMovementResponse,
     BankStatementResponse,
+    PaymentAuditCompletePaymentResponse,
     PaymentAuditFindingResponse,
     PaymentAuditRunRequest,
     PaymentAuditRunResponse,
@@ -1501,3 +1503,34 @@ def list_payment_audit_findings_endpoint(
     finding_type: str | None = None,
 ):
     return list_payment_audit_findings(status=status, finding_type=finding_type)
+
+
+_COMPLETE_PAYMENT_ERRORS: dict[str, tuple[int, str]] = {
+    "not_found": (404, "Finding not found."),
+    "not_open": (409, "Finding is not open."),
+    "not_match_found": (400, "Only match_found findings can be completed."),
+    "movement_not_found": (409, "Bank movement not found."),
+    "movement_already_matched": (409, "Bank movement is already matched to a payment."),
+    "payment_not_found": (409, "No payment row found for this contract and period."),
+    "already_paid": (409, "Payment is already fully paid."),
+    "amount_exceeds_remaining": (409, "Movement amount exceeds the remaining balance."),
+}
+
+
+@app.post(
+    "/payment-audit/findings/{finding_id}/complete-payment",
+    tags=["payment-audit"],
+    summary="Complete a payment from a match_found audit finding",
+    response_model=PaymentAuditCompletePaymentResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Finding is not of type match_found"},
+        404: {"model": ErrorResponse, "description": "Finding not found"},
+        409: {"model": ErrorResponse, "description": "Completion not allowed"},
+    },
+)
+def complete_payment_endpoint(finding_id: int):
+    try:
+        return complete_payment_from_audit_finding(finding_id)
+    except ValueError as exc:
+        status_code, detail = _COMPLETE_PAYMENT_ERRORS.get(str(exc), (409, str(exc)))
+        raise HTTPException(status_code=status_code, detail=detail)

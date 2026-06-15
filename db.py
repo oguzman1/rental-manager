@@ -2985,3 +2985,109 @@ def mark_payment_audit_finding_resolved(
         )
         conn.commit()
     return cursor.rowcount > 0
+
+
+def complete_payment_from_audit_finding(finding_id: int) -> dict:
+    """Atomically complete a payment from a match_found audit finding.
+
+    Creates exactly one payment_entry, updates payment paid_amount/status,
+    marks the bank_movement as matched, and resolves the finding.
+    All operations run in a single transaction — if any step fails, nothing is written.
+    """
+    with get_connection() as conn:
+        # 1. Load and validate finding
+        row = conn.execute(
+            "SELECT * FROM payment_audit_findings WHERE id = ?", (finding_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("not_found")
+        finding = _payment_audit_finding_row_to_dict(row)
+
+        if finding["status"] != "open":
+            raise ValueError("not_open")
+        if finding["finding_type"] != "match_found":
+            raise ValueError("not_match_found")
+
+        contract_id = finding["contract_id"]
+        period = finding["period"]
+        bank_movement_id = finding["bank_movement_id"]
+        candidate_amount = finding["candidate_amount"]
+
+        # 2. Load and validate bank movement
+        m_row = conn.execute(
+            "SELECT * FROM bank_movements WHERE id = ?", (bank_movement_id,)
+        ).fetchone()
+        if m_row is None:
+            raise ValueError("movement_not_found")
+        movement = _bank_movement_row_to_dict(m_row)
+        if movement["matched_payment_id"] is not None:
+            raise ValueError("movement_already_matched")
+
+        # 3. Load existing payment for contract+period (no side-effects)
+        p_row = conn.execute(
+            "SELECT * FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, period),
+        ).fetchone()
+        if p_row is None:
+            raise ValueError("payment_not_found")
+        payment_id = p_row[0]
+        expected_amount = p_row[4]
+        current_paid = p_row[5] or 0
+
+        # 4. Validate remaining amount
+        remaining = expected_amount - current_paid
+        if remaining <= 0:
+            raise ValueError("already_paid")
+        entry_amount = candidate_amount
+        if entry_amount > remaining:
+            raise ValueError("amount_exceeds_remaining")
+
+        # 5. Compute new paid_amount and status
+        new_paid = current_paid + entry_amount
+        total_deductions = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payment_deductions WHERE payment_id = ?",
+            (payment_id,),
+        ).fetchone()[0]
+        recognized = new_paid + total_deductions
+        new_status = "paid" if recognized >= expected_amount else "partial"
+
+        # 6. Insert payment entry
+        entry_cursor = conn.execute(
+            "INSERT INTO payment_entries (payment_id, amount) VALUES (?, ?)",
+            (payment_id, entry_amount),
+        )
+        payment_entry_id = entry_cursor.lastrowid
+
+        # 7. Update payment paid_amount and status
+        conn.execute(
+            "UPDATE payments SET paid_amount = ?, status = ? WHERE id = ?",
+            (new_paid, new_status, payment_id),
+        )
+
+        # 8. Mark bank movement as matched
+        conn.execute(
+            "UPDATE bank_movements SET matched_payment_id = ? WHERE id = ?",
+            (payment_id, bank_movement_id),
+        )
+
+        # 9. Resolve finding
+        resolution_note = f"Completado desde movimiento cartola #{bank_movement_id}"
+        conn.execute(
+            """
+            UPDATE payment_audit_findings
+            SET status = 'resolved', resolution_note = ?, resolved_at = datetime('now')
+            WHERE id = ?
+            """,
+            (resolution_note, finding_id),
+        )
+
+        conn.commit()
+
+    return {
+        "finding_id": finding_id,
+        "payment_id": payment_id,
+        "payment_entry_id": payment_entry_id,
+        "amount": entry_amount,
+        "status": new_status,
+        "resolution_note": resolution_note,
+    }

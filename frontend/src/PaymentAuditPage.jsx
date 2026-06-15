@@ -114,6 +114,7 @@ function PaymentAuditPage() {
   const [findingsError, setFindingsError] = useState(null)
   const [isRunningAudit, setIsRunningAudit] = useState(false)
   const [auditResult, setAuditResult] = useState(null)
+  const [completingId, setCompletingId] = useState(null)
 
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
@@ -176,6 +177,29 @@ function PaymentAuditPage() {
       setFindingsError(`Error al auditar: ${err.message}`)
     } finally {
       setIsRunningAudit(false)
+    }
+  }
+
+  async function handleCompletePayment(finding) {
+    const confirmed = window.confirm(
+      `¿Confirmar pago de ${formatCLP(finding.candidate_amount)} para período ${finding.period}?`
+    )
+    if (!confirmed) return
+    setCompletingId(finding.id)
+    setFindingsError(null)
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/findings/${finding.id}/complete-payment`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await Promise.all([loadFindings(), loadMovements(), loadStatements()])
+    } catch (err) {
+      setFindingsError(`Error al completar pago: ${err.message}`)
+    } finally {
+      setCompletingId(null)
     }
   }
 
@@ -567,6 +591,22 @@ function PaymentAuditPage() {
                         <div className="audit-issue-title">{findingTitle(f)}</div>
                         <p className="audit-issue-desc">{findingDescription(f)}</p>
                       </div>
+                      {activeTab === 'completar' && f.finding_type === 'match_found' && (
+                        f.status === 'open' ? (
+                          <button
+                            className="btn-primary"
+                            onClick={() => handleCompletePayment(f)}
+                            disabled={completingId === f.id}
+                          >
+                            {completingId === f.id ? 'Completando…' : 'Completar pago'}
+                          </button>
+                        ) : (
+                          <span className="badge badge-ok">
+                            <span className="badge-dot" />
+                            Completado
+                          </span>
+                        )
+                      )}
                     </div>
                   ))
                 })()}

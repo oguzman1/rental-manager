@@ -46,6 +46,7 @@ from db import (
     list_bank_movements,
     list_bank_statements,
     list_contracts,
+    list_payment_audit_findings,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
@@ -64,11 +65,15 @@ from db import (
     update_payment,
     update_tenant,
 )
+import payment_audit_engine
 from models import (
     AdjustmentFrequency,
     AdjustmentDismissResponse,
     BankMovementResponse,
     BankStatementResponse,
+    PaymentAuditFindingResponse,
+    PaymentAuditRunRequest,
+    PaymentAuditRunResponse,
     ContractCloseRequest,
     ContractCreate,
     ContractDetailResponse,
@@ -1470,3 +1475,29 @@ def parse_bank_statement_endpoint(statement_id: int):
 )
 def list_bank_movements_endpoint(statement_id: int | None = None):
     return list_bank_movements(statement_id=statement_id)
+
+
+@app.post(
+    "/payment-audit/run",
+    tags=["payment-audit"],
+    summary="Run the payment audit engine and produce findings",
+    response_model=PaymentAuditRunResponse,
+)
+def run_payment_audit(body: PaymentAuditRunRequest):
+    return payment_audit_engine.run_audit(
+        period_from=body.period_from,
+        period_to=body.period_to,
+    )
+
+
+@app.get(
+    "/payment-audit/findings",
+    tags=["payment-audit"],
+    summary="List payment audit findings",
+    response_model=list[PaymentAuditFindingResponse],
+)
+def list_payment_audit_findings_endpoint(
+    status: str | None = None,
+    finding_type: str | None = None,
+):
+    return list_payment_audit_findings(status=status, finding_type=finding_type)

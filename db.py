@@ -2867,6 +2867,36 @@ def delete_payer_alias(alias_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+def list_payments_in_range(period_from: str | None = None, period_to: str | None = None) -> list[dict]:
+    """Return payments in a period range without triggering period generation."""
+    conditions: list[str] = []
+    params: list = []
+    if period_from is not None:
+        conditions.append("period >= ?")
+        params.append(period_from)
+    if period_to is not None:
+        conditions.append("period <= ?")
+        params.append(period_to)
+    query = "SELECT id, contract_id, period, due_date, expected_amount, paid_amount, status FROM payments"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY period, contract_id"
+    with get_connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "id": r[0],
+            "contract_id": r[1],
+            "period": r[2],
+            "due_date": r[3],
+            "expected_amount": r[4],
+            "paid_amount": r[5],
+            "status": r[6],
+        }
+        for r in rows
+    ]
+
+
 # --- Payment audit: findings ---------------------------------------------------
 
 def _payment_audit_finding_row_to_dict(row) -> dict:

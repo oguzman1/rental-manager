@@ -449,6 +449,34 @@ class BankStatementResponse(BaseModel):
     parsed_at: str | None = None
 
 
+class PaymentAuditRunRequest(BaseModel):
+    period_from: str | None = None
+    period_to: str | None = None
+
+
+class PaymentAuditRunResponse(BaseModel):
+    created: int
+    skipped_duplicates: int
+    period_from: str | None
+    period_to: str | None
+    summary: dict[str, int]
+
+
+class PaymentAuditFindingResponse(BaseModel):
+    id: int
+    finding_type: str
+    contract_id: int | None = None
+    period: str | None = None
+    bank_movement_id: int | None = None
+    expected_amount: int | None = None
+    candidate_amount: int | None = None
+    confidence: str
+    status: str
+    resolution_note: str | None = None
+    created_at: str
+    resolved_at: str | None = None
+
+
 class BankMovementResponse(BaseModel):
     id: int
     statement_id: int

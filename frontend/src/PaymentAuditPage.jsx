@@ -65,48 +65,24 @@ const TABS = [
   { id: 'movimientos', label: 'Movimientos cartola' },
 ]
 
-const TAB_ITEMS = {
-  inconsistencias: [
-    {
-      title: 'Depto Las Condes · Junio sin respaldo',
-      description: 'Se esperaba $759.808 cerca del 05/06 y no aparece abono compatible.',
-      action: 'Resolver',
-    },
-    {
-      title: 'Casa Chiloé · Mayo dudoso',
-      description: 'Monto exacto por $520.000, pero el nombre "FRANCISCO" no está guardado como alias.',
-      action: 'Resolver',
-    },
-    {
-      title: 'Depto Serena · Abril sin respaldo',
-      description: 'No aparece por nombre, cuenta ni monto en las cartolas cargadas.',
-      action: 'Resolver',
-    },
-  ],
-  completar: [
-    {
-      title: '$801.875 · 05/06 · NICOLAS DELGADO',
-      description: 'Sugerido: Depto Serena · Junio 2026 · confianza alta. Crearía un abono al confirmar.',
-      action: 'Completar pago',
-    },
-    {
-      title: '$200.000 · 16/05 · N DELGADO',
-      description: 'Completa saldo parcial de mayo. No reemplaza el abono ya registrado.',
-      action: 'Completar pago',
-    },
-  ],
-  'no-encontrados': [
-    {
-      title: 'Depto Las Condes · Junio · $759.808',
-      description: 'No hay abono compatible en Banco de Chile para el período auditado.',
-      action: 'Marcar revisado',
-    },
-    {
-      title: 'Depto Serena · Abril · $801.875',
-      description: 'No aparece por nombre ni monto. Puede ser deuda real o falta cargar otra cartola.',
-      action: 'Marcar revisado',
-    },
-  ],
+function findingTitle(f) {
+  if (f.finding_type === 'missing_payment') return `Contrato #${f.contract_id} · ${f.period} sin abono`
+  if (f.finding_type === 'match_found') return `${formatCLP(f.candidate_amount)} · ${f.period} · coincidencia ${f.confidence}`
+  if (f.finding_type === 'amount_mismatch') return `Contrato #${f.contract_id} · ${f.period} · monto distinto`
+  if (f.finding_type === 'unmatched_movement') return `${formatCLP(f.candidate_amount)} · movimiento sin contrato`
+  return `Hallazgo #${f.id}`
+}
+
+function findingDescription(f) {
+  if (f.finding_type === 'missing_payment')
+    return `Pago esperado: ${formatCLP(f.expected_amount)}. Sin abono compatible encontrado en cartola.`
+  if (f.finding_type === 'match_found')
+    return `Movimiento #${f.bank_movement_id} coincide con contrato #${f.contract_id} período ${f.period}. Sin confirmar.`
+  if (f.finding_type === 'amount_mismatch')
+    return `Se esperaba ${formatCLP(f.expected_amount)}, se encontró ${formatCLP(f.candidate_amount)} (movimiento #${f.bank_movement_id}).`
+  if (f.finding_type === 'unmatched_movement')
+    return `Movimiento #${f.bank_movement_id} no coincide con ningún contrato conocido.`
+  return ''
 }
 
 function MonthBadge({ label, state }) {
@@ -133,6 +109,11 @@ function PaymentAuditPage() {
   const [movements, setMovements] = useState([])
   const [movementsError, setMovementsError] = useState(null)
   const [isLoadingMovements, setIsLoadingMovements] = useState(false)
+
+  const [findings, setFindings] = useState([])
+  const [findingsError, setFindingsError] = useState(null)
+  const [isRunningAudit, setIsRunningAudit] = useState(false)
+  const [auditResult, setAuditResult] = useState(null)
 
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
@@ -163,9 +144,45 @@ function PaymentAuditPage() {
     }
   }
 
+  async function loadFindings() {
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/findings`)
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      setFindings(await res.json())
+      setFindingsError(null)
+    } catch (err) {
+      setFindingsError(`Error al cargar hallazgos: ${err.message}`)
+    }
+  }
+
+  async function handleRunAudit() {
+    setIsRunningAudit(true)
+    setFindingsError(null)
+    setAuditResult(null)
+    try {
+      const res = await fetch(`${API_BASE}/payment-audit/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      const result = await res.json()
+      setAuditResult(result)
+      await loadFindings()
+    } catch (err) {
+      setFindingsError(`Error al auditar: ${err.message}`)
+    } finally {
+      setIsRunningAudit(false)
+    }
+  }
+
   useEffect(() => {
     loadStatements()
     loadMovements()
+    loadFindings()
   }, [])
 
   useEffect(() => {
@@ -347,10 +364,19 @@ function PaymentAuditPage() {
                   <option value="12m">Últimos 12 meses</option>
                   <option value="2026">2026 completo</option>
                 </select>
-                <button className="btn-primary audit-step-btn">
+                <button
+                  className="btn-primary audit-step-btn"
+                  onClick={handleRunAudit}
+                  disabled={isRunningAudit}
+                >
                   <span className="step-badge">3</span>
-                  Auditar pagos
+                  {isRunningAudit ? 'Auditando…' : 'Auditar pagos'}
                 </button>
+                {auditResult && (
+                  <p className="audit-col-text">
+                    {`${auditResult.created} hallazgo${auditResult.created !== 1 ? 's' : ''} nuevo${auditResult.created !== 1 ? 's' : ''} · ${auditResult.skipped_duplicates} duplicado${auditResult.skipped_duplicates !== 1 ? 's' : ''} omitido${auditResult.skipped_duplicates !== 1 ? 's' : ''}`}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -523,15 +549,28 @@ function PaymentAuditPage() {
                 )}
               </>
             ) : (
-              TAB_ITEMS[activeTab].map((item) => (
-                <div className="detail-card audit-issue-card" key={item.title}>
-                  <div>
-                    <div className="audit-issue-title">{item.title}</div>
-                    <p className="audit-issue-desc">{item.description}</p>
-                  </div>
-                  {item.action && <button className="btn-secondary">{item.action}</button>}
-                </div>
-              ))
+              <>
+                {findingsError && <div className="payment-form-error">{findingsError}</div>}
+                {(() => {
+                  const tabFindings =
+                    activeTab === 'inconsistencias'
+                      ? findings.filter((f) => f.finding_type === 'missing_payment' || f.finding_type === 'amount_mismatch')
+                      : activeTab === 'completar'
+                      ? findings.filter((f) => f.finding_type === 'match_found')
+                      : findings.filter((f) => f.finding_type === 'unmatched_movement')
+                  if (tabFindings.length === 0) {
+                    return <p className="audit-col-text">No hay hallazgos en esta categoría.</p>
+                  }
+                  return tabFindings.map((f) => (
+                    <div className="detail-card audit-issue-card" key={f.id}>
+                      <div>
+                        <div className="audit-issue-title">{findingTitle(f)}</div>
+                        <p className="audit-issue-desc">{findingDescription(f)}</p>
+                      </div>
+                    </div>
+                  ))
+                })()}
+              </>
             )}
           </div>
         </div>

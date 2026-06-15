@@ -5888,3 +5888,321 @@ def test_list_movements_endpoint_does_not_mutate_payments_or_payment_entries():
     assert after_entries == before_entries
 
     _cleanup_movements_and_statement(statement_id)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Payment audit: findings engine
+# ──────────────────────────────────────────────────────────────────────────────
+
+_audit_seq = 0
+
+
+def _make_audit_contract(tenant_name: str) -> int:
+    """Create an active contract with the given tenant display_name. Returns contract_id."""
+    global _audit_seq
+    _audit_seq += 1
+    rol = f"97001-{_audit_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "AUDIT",
+                "rol": rol,
+                "address": f"Audit Calle {_audit_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": tenant_name})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "current_rent": 600000,
+        },
+    )
+    assert r.status_code == 200, r.json()
+    return r.json()["id"]
+
+
+def _make_audit_statement(suffix: str) -> int:
+    return _db.insert_bank_statement(
+        {
+            "bank": "banco_de_chile",
+            "original_filename": f"audit_eng_{suffix}.xls",
+            "stored_path": f"uploads/cartolas/audit_eng_{suffix}.xls",
+            "mime_type": "application/vnd.ms-excel",
+            "size_bytes": 100,
+            "file_hash": f"hash-audit-eng-{suffix}",
+            "period_label": "2099-01",
+        }
+    )
+
+
+def _make_audit_movement(statement_id: int, suffix: str, amount: int, description: str, movement_date: str) -> int:
+    return _db.insert_bank_movement(
+        {
+            "statement_id": statement_id,
+            "movement_date": movement_date,
+            "description": description,
+            "amount": amount,
+            "balance_after": 5000000,
+            "dedup_key": f"dedup-audit-eng-{suffix}",
+        }
+    )
+
+
+def _cleanup_engine_findings(*, contract_id: int | None = None, movement_id: int | None = None):
+    with _db.get_connection() as conn:
+        if contract_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE contract_id = ?", (contract_id,))
+        if movement_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE bank_movement_id = ?", (movement_id,))
+        conn.commit()
+
+
+def _cleanup_engine_movement(statement_id: int, movement_id: int):
+    with _db.get_connection() as conn:
+        conn.execute("DELETE FROM bank_movements WHERE id = ?", (movement_id,))
+        conn.commit()
+    _delete_statement_and_file(statement_id)
+
+
+def _cleanup_engine_payments(contract_id: int):
+    with _db.get_connection() as conn:
+        conn.execute("DELETE FROM payments WHERE contract_id = ?", (contract_id,))
+        conn.commit()
+
+
+# --- POST /payment-audit/run -------------------------------------------------
+
+
+def test_run_audit_returns_200():
+    r = client.post("/payment-audit/run", json={})
+    assert r.status_code == 200
+
+
+def test_run_audit_response_has_required_fields():
+    r = client.post("/payment-audit/run", json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert "created" in data
+    assert "skipped_duplicates" in data
+    assert "period_from" in data
+    assert "period_to" in data
+    assert "summary" in data
+
+
+def test_run_audit_does_not_create_payments():
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+
+    client.post("/payment-audit/run", json={})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+
+    assert after == before
+
+
+def test_run_audit_does_not_create_payment_entries():
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    client.post("/payment-audit/run", json={})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    assert after == before
+
+
+def test_run_audit_is_idempotent():
+    """Second run skips all findings created by the first run."""
+    contract_id = _make_audit_contract("ARRENDATARIO IDEMPOTENTE")
+    _insert_raw_payment(contract_id, "2099-06", status="pending")
+    statement_id = _make_audit_statement("idempotent")
+    movement_id = _make_audit_movement(
+        statement_id, "idempotent", 600000,
+        "TRANSFERENCIA ARRENDATARIO IDEMPOTENTE", "2099-06-05",
+    )
+
+    r1 = client.post("/payment-audit/run", json={"period_from": "2099-06", "period_to": "2099-06"})
+    assert r1.status_code == 200
+    created_first = r1.json()["created"]
+    assert created_first >= 1
+
+    r2 = client.post("/payment-audit/run", json={"period_from": "2099-06", "period_to": "2099-06"})
+    assert r2.status_code == 200
+    assert r2.json()["created"] == 0
+    assert r2.json()["skipped_duplicates"] >= created_first
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+# --- GET /payment-audit/findings ---------------------------------------------
+
+
+def test_get_findings_returns_200_and_list():
+    r = client.get("/payment-audit/findings")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_get_findings_filters_by_finding_type():
+    statement_id = _make_audit_statement("filter-ft")
+    movement_id = _make_audit_movement(statement_id, "filter-ft", 111222, "ABONO FILTER FT", "2099-07-01")
+    _db.insert_payment_audit_finding(
+        {
+            "finding_type": "unmatched_movement",
+            "bank_movement_id": movement_id,
+            "candidate_amount": 111222,
+            "confidence": "low",
+        }
+    )
+
+    r = client.get("/payment-audit/findings", params={"finding_type": "unmatched_movement"})
+    assert r.status_code == 200
+    assert all(f["finding_type"] == "unmatched_movement" for f in r.json())
+
+    r2 = client.get("/payment-audit/findings", params={"finding_type": "match_found"})
+    assert not any(f["bank_movement_id"] == movement_id for f in r2.json())
+
+    _cleanup_engine_findings(movement_id=movement_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_get_findings_filters_by_status():
+    _db.insert_payment_audit_finding(
+        {
+            "finding_type": "unmatched_movement",
+            "candidate_amount": 333444,
+            "confidence": "low",
+            "status": "dismissed",
+        }
+    )
+
+    r_open = client.get("/payment-audit/findings", params={"status": "open"})
+    assert all(f["status"] == "open" for f in r_open.json())
+
+    r_dismissed = client.get("/payment-audit/findings", params={"status": "dismissed"})
+    assert any(f["status"] == "dismissed" for f in r_dismissed.json())
+
+
+# --- Engine finding types -----------------------------------------------------
+
+
+def test_run_audit_produces_missing_payment():
+    contract_id = _make_audit_contract("INQUILINO SIN ABONO")
+    _insert_raw_payment(contract_id, "2099-08", status="pending")
+
+    r = client.post("/payment-audit/run", json={"period_from": "2099-08", "period_to": "2099-08"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings", params={"finding_type": "missing_payment"}).json()
+    match = [f for f in findings if f["contract_id"] == contract_id and f["period"] == "2099-08"]
+    assert len(match) == 1
+
+    _cleanup_engine_findings(contract_id=contract_id)
+    _cleanup_engine_payments(contract_id)
+
+
+def test_run_audit_produces_match_found():
+    contract_id = _make_audit_contract("ARRENDATARIO MATCH TEST")
+    _insert_raw_payment(contract_id, "2099-09", status="pending")
+    statement_id = _make_audit_statement("match-test")
+    movement_id = _make_audit_movement(
+        statement_id, "match-test", 600000,
+        "TRANSFERENCIA ARRENDATARIO MATCH TEST", "2099-09-05",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2099-09", "period_to": "2099-09"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings", params={"finding_type": "match_found"}).json()
+    match = [f for f in findings if f["contract_id"] == contract_id and f["period"] == "2099-09"]
+    assert len(match) == 1
+    assert match[0]["confidence"] == "high"
+    assert match[0]["bank_movement_id"] == movement_id
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_run_audit_produces_unmatched_movement():
+    statement_id = _make_audit_statement("unmatched-test")
+    movement_id = _make_audit_movement(
+        statement_id, "unmatched-test", 987654,
+        "ABONO DESCONOCIDO ZZZ999", "2099-10-01",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2099-10", "period_to": "2099-10"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings", params={"finding_type": "unmatched_movement"}).json()
+    match = [f for f in findings if f["bank_movement_id"] == movement_id]
+    assert len(match) == 1
+
+    _cleanup_engine_findings(movement_id=movement_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_run_audit_produces_amount_mismatch():
+    contract_id = _make_audit_contract("ARRENDATARIO MONTO DISTINTO")
+    _insert_raw_payment(contract_id, "2099-11", status="pending")
+    statement_id = _make_audit_statement("mismatch-test")
+    movement_id = _make_audit_movement(
+        statement_id, "mismatch-test", 400000,
+        "TRANSFERENCIA ARRENDATARIO MONTO DISTINTO", "2099-11-05",
+    )
+
+    r = client.post("/payment-audit/run", json={"period_from": "2099-11", "period_to": "2099-11"})
+    assert r.status_code == 200
+
+    findings = client.get("/payment-audit/findings", params={"finding_type": "amount_mismatch"}).json()
+    match = [f for f in findings if f["contract_id"] == contract_id and f["period"] == "2099-11"]
+    assert len(match) == 1
+    assert match[0]["expected_amount"] == 600000
+    assert match[0]["candidate_amount"] == 400000
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_upload_parse_does_not_create_findings(monkeypatch):
+    monkeypatch.setattr(_main, "parse_xls", _make_fake_parse_xls("no-findings-eng"))
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_audit_findings").fetchone()[0]
+
+    content = b"\xd0\xcf\x11\xe0fake xls bytes for no-findings engine test"
+    r = client.post(
+        "/payment-audit/statements",
+        files={"file": ("cartola_no_findings.xls", io.BytesIO(content), "application/vnd.ms-excel")},
+    )
+    statement_id = r.json()["id"]
+    client.post(f"/payment-audit/statements/{statement_id}/parse")
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_audit_findings").fetchone()[0]
+
+    assert after == before
+
+    _cleanup_movements_and_statement(statement_id)

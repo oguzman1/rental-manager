@@ -158,17 +158,30 @@ def run_audit(period_from: str | None = None, period_to: str | None = None) -> d
 
 
 # Worst-to-best ordering for collapsing a contract's month statuses into one.
-_MONTH_STATUS_RANK = {"matched_registered": 0, "found_not_registered": 1, "missing": 2}
+_MONTH_STATUS_RANK = {
+    "matched_registered": 0,
+    "found_not_registered": 1,
+    "registered_not_found": 1,
+    "missing": 2,
+}
 
 
 def build_contract_summary(period_from: str | None = None, period_to: str | None = None) -> dict:
     """Per-contract, per-month audit status for the given period.
 
-    For each active contract and each period in range that has a payment row:
-    - "matched_registered": the payment is already paid/registered.
+    For each active contract and each period in range that has a payment row,
+    two independent signals are checked: whether the payment is registered in
+    Rental Manager, and whether a compatible bank movement was found in the
+    uploaded/processed cartolas.
+
+    - "matched_registered": the payment is registered AND a compatible
+      movement was found.
+    - "registered_not_found": the payment is registered but no compatible
+      movement was found in the cartola data.
     - "found_not_registered": a compatible bank movement exists but the
       payment is not yet registered.
-    - "missing": the payment is expected but no compatible movement was found.
+    - "missing": the payment is expected but neither a registration nor a
+      compatible movement was found.
 
     A contract's overall_status is the worst of its month statuses, or
     "no_data" if it has no payment rows in the period.
@@ -209,10 +222,13 @@ def build_contract_summary(period_from: str | None = None, period_to: str | None
 
             period_movements = [m for m in movements_in_period if m["movement_date"][:7] == period]
             best_match, _, _ = _find_best_match(period_movements, expected, candidate_names)
+            movement_found = best_match is not None
 
-            if registered:
+            if registered and movement_found:
                 status = "matched_registered"
-            elif best_match is not None:
+            elif registered and not movement_found:
+                status = "registered_not_found"
+            elif not registered and movement_found:
                 status = "found_not_registered"
             else:
                 status = "missing"

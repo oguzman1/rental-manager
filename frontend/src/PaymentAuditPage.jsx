@@ -116,6 +116,7 @@ function PaymentAuditPage() {
   const [auditResult, setAuditResult] = useState(null)
   const [completingId, setCompletingId] = useState(null)
   const [resolvingFindingId, setResolvingFindingId] = useState(null)
+  const [resolvingUnmatchedId, setResolvingUnmatchedId] = useState(null)
 
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
@@ -227,6 +228,32 @@ function PaymentAuditPage() {
       setFindingsError(`Error al marcar revisado: ${err.message}`)
     } finally {
       setResolvingFindingId(null)
+    }
+  }
+
+  async function handleResolveUnmatchedMovement(finding) {
+    const note = window.prompt('Nota para resolver este movimiento no encontrado:')
+    if (!note || !note.trim()) return
+    setResolvingUnmatchedId(finding.id)
+    setFindingsError(null)
+    try {
+      const res = await fetch(
+        `${API_BASE}/payment-audit/findings/${finding.id}/resolve-unmatched-movement`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resolution_note: note.trim() }),
+        }
+      )
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadFindings()
+    } catch (err) {
+      setFindingsError(`Error al marcar revisado: ${err.message}`)
+    } finally {
+      setResolvingUnmatchedId(null)
     }
   }
 
@@ -642,6 +669,22 @@ function PaymentAuditPage() {
                             disabled={resolvingFindingId === f.id}
                           >
                             {resolvingFindingId === f.id ? 'Guardando…' : 'Marcar revisado'}
+                          </button>
+                        ) : (
+                          <span className="badge badge-ok">
+                            <span className="badge-dot" />
+                            Revisado
+                          </span>
+                        )
+                      )}
+                      {activeTab === 'no-encontrados' && f.finding_type === 'unmatched_movement' && (
+                        f.status === 'open' ? (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleResolveUnmatchedMovement(f)}
+                            disabled={resolvingUnmatchedId === f.id}
+                          >
+                            {resolvingUnmatchedId === f.id ? 'Guardando…' : 'Marcar revisado'}
                           </button>
                         ) : (
                           <span className="badge badge-ok">

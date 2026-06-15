@@ -6932,3 +6932,258 @@ def test_run_audit_does_not_resolve_missing_payment_findings():
 
     _cleanup_engine_findings(contract_id=contract_id)
     _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /payment-audit/findings/{finding_id}/resolve-unmatched-movement
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _make_unmatched_statement(suffix: str) -> int:
+    return _db.insert_bank_statement(
+        {
+            "bank": "banco_de_chile",
+            "original_filename": f"unmatched_test_{suffix}.xls",
+            "stored_path": f"uploads/cartolas/unmatched_test_{suffix}.xls",
+            "mime_type": "application/vnd.ms-excel",
+            "size_bytes": 100,
+            "file_hash": f"hash-unmatched-test-{suffix}",
+            "period_label": "2094-01",
+        }
+    )
+
+
+def _make_unmatched_movement(statement_id: int, suffix: str, amount: int = 500000) -> int:
+    return _db.insert_bank_movement(
+        {
+            "statement_id": statement_id,
+            "movement_date": "2094-01-15",
+            "description": f"ABONO DESCONOCIDO UNMATCHED {suffix}",
+            "amount": amount,
+            "balance_after": 9000000,
+            "dedup_key": f"dedup-unmatched-test-{suffix}",
+        }
+    )
+
+
+def _make_unmatched_finding(movement_id: int, amount: int = 500000, status: str = "open") -> int:
+    return _db.insert_payment_audit_finding(
+        {
+            "finding_type": "unmatched_movement",
+            "contract_id": None,
+            "period": None,
+            "bank_movement_id": movement_id,
+            "expected_amount": None,
+            "candidate_amount": amount,
+            "confidence": "low",
+            "status": status,
+        }
+    )
+
+
+def _cleanup_unmatched(
+    *,
+    finding_id: int | None = None,
+    movement_id: int | None = None,
+    statement_id: int | None = None,
+):
+    with _db.get_connection() as conn:
+        if finding_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE id = ?", (finding_id,))
+        if movement_id is not None:
+            conn.execute("DELETE FROM bank_movements WHERE id = ?", (movement_id,))
+        if statement_id is not None:
+            conn.execute("DELETE FROM bank_statements WHERE id = ?", (statement_id,))
+        conn.commit()
+
+
+_UNMATCHED_URL = "/payment-audit/findings/{}/resolve-unmatched-movement"
+
+
+def test_resolve_unmatched_movement_returns_200():
+    statement_id = _make_unmatched_statement("um-01")
+    movement_id = _make_unmatched_movement(statement_id, "um-01")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    r = client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Movimiento revisado"})
+    assert r.status_code == 200
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_updates_status_to_resolved():
+    statement_id = _make_unmatched_statement("um-02")
+    movement_id = _make_unmatched_movement(statement_id, "um-02")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "resolved"
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_stores_resolution_note():
+    statement_id = _make_unmatched_statement("um-03")
+    movement_id = _make_unmatched_movement(statement_id, "um-03")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    note = "Transferencia de otro arrendatario, ya aclarado"
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": note})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolution_note"] == note
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_sets_resolved_at():
+    statement_id = _make_unmatched_statement("um-04")
+    movement_id = _make_unmatched_movement(statement_id, "um-04")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolved_at"] is not None
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_not_found_returns_404():
+    r = client.post(_UNMATCHED_URL.format(999999999), json={"resolution_note": "Revisado"})
+    assert r.status_code == 404
+
+
+def test_resolve_unmatched_movement_not_open_returns_409():
+    statement_id = _make_unmatched_statement("um-06")
+    movement_id = _make_unmatched_movement(statement_id, "um-06")
+    finding_id = _make_unmatched_finding(movement_id, status="resolved")
+
+    r = client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 409
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_wrong_type_returns_400():
+    finding_id = _db.insert_payment_audit_finding(
+        {
+            "finding_type": "missing_payment",
+            "contract_id": None,
+            "period": "2094-07",
+            "bank_movement_id": None,
+            "expected_amount": 500000,
+            "candidate_amount": None,
+            "confidence": "high",
+            "status": "open",
+        }
+    )
+
+    r = client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 400
+
+    _cleanup_unmatched(finding_id=finding_id)
+
+
+def test_resolve_unmatched_movement_empty_note_returns_400():
+    statement_id = _make_unmatched_statement("um-08")
+    movement_id = _make_unmatched_movement(statement_id, "um-08")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    r = client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "  "})
+    assert r.status_code == 400
+
+    r2 = client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": ""})
+    assert r2.status_code == 400
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_does_not_mutate_payments():
+    statement_id = _make_unmatched_statement("um-09")
+    movement_id = _make_unmatched_movement(statement_id, "um-09")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0]
+    assert after == before
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_does_not_mutate_payment_entries():
+    statement_id = _make_unmatched_statement("um-10")
+    movement_id = _make_unmatched_movement(statement_id, "um-10")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_does_not_mutate_payment_deductions():
+    statement_id = _make_unmatched_statement("um-11")
+    movement_id = _make_unmatched_movement(statement_id, "um-11")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+    assert after == before
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_unmatched_movement_does_not_mutate_bank_movements():
+    statement_id = _make_unmatched_statement("um-12")
+    movement_id = _make_unmatched_movement(statement_id, "um-12")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    with _db.get_connection() as conn:
+        before_count = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+        before_matched = conn.execute(
+            "SELECT matched_payment_id FROM bank_movements WHERE id = ?", (movement_id,)
+        ).fetchone()[0]
+
+    client.post(_UNMATCHED_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after_count = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+        after_matched = conn.execute(
+            "SELECT matched_payment_id FROM bank_movements WHERE id = ?", (movement_id,)
+        ).fetchone()[0]
+    assert after_count == before_count
+    assert after_matched == before_matched
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_run_audit_does_not_resolve_unmatched_movement_findings():
+    statement_id = _make_unmatched_statement("um-13")
+    movement_id = _make_unmatched_movement(statement_id, "um-13")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    client.post("/payment-audit/run", json={})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "open"
+
+    _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)

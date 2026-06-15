@@ -2949,26 +2949,45 @@ def get_payment_audit_finding(finding_id: int) -> dict | None:
     return _payment_audit_finding_row_to_dict(row) if row else None
 
 
+def _payment_audit_finding_enriched_row_to_dict(row) -> dict:
+    d = _payment_audit_finding_row_to_dict(row)
+    d["property_label"] = row[12]
+    d["tenant_name"] = row[13]
+    return d
+
+
 def list_payment_audit_findings(
     status: str | None = None, finding_type: str | None = None
 ) -> list[dict]:
     conditions = []
     params: list = []
     if status is not None:
-        conditions.append("status = ?")
+        conditions.append("f.status = ?")
         params.append(status)
     if finding_type is not None:
-        conditions.append("finding_type = ?")
+        conditions.append("f.finding_type = ?")
         params.append(finding_type)
 
-    query = "SELECT * FROM payment_audit_findings"
+    query = """
+        SELECT
+            f.id, f.finding_type, f.contract_id, f.period,
+            f.bank_movement_id, f.expected_amount, f.candidate_amount,
+            f.confidence, f.status, f.resolution_note, f.created_at, f.resolved_at,
+            p.display_name AS property_label,
+            t.display_name AS tenant_name
+        FROM payment_audit_findings f
+        LEFT JOIN contracts c ON c.id = f.contract_id
+        LEFT JOIN properties p ON p.id = c.property_id
+        LEFT JOIN contract_tenants ct ON ct.contract_id = c.id AND ct.is_primary = 1
+        LEFT JOIN tenants t ON t.id = ct.tenant_id
+    """
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY id"
+    query += " ORDER BY f.id"
 
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
-    return [_payment_audit_finding_row_to_dict(row) for row in rows]
+    return [_payment_audit_finding_enriched_row_to_dict(row) for row in rows]
 
 
 def mark_payment_audit_finding_resolved(

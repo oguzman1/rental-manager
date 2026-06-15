@@ -488,6 +488,8 @@ class PaymentAuditFindingResponse(BaseModel):
     resolution_note: str | None = None
     created_at: str
     resolved_at: str | None = None
+    property_label: str | None = None
+    tenant_name: str | None = None
 
 
 class BankMovementResponse(BaseModel):

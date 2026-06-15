@@ -59,7 +59,7 @@ def run_audit(period_from: str | None = None, period_to: str | None = None) -> d
 
     created = 0
     skipped = 0
-    summary = {k: 0 for k in ("missing_payment", "match_found", "amount_mismatch", "unmatched_movement")}
+    summary = {k: 0 for k in ("missing_payment", "match_found", "amount_mismatch")}
     matched_movement_ids: set[int] = set()
 
     for payment in payments:
@@ -67,8 +67,13 @@ def run_audit(period_from: str | None = None, period_to: str | None = None) -> d
         if not contract:
             continue
 
-        period = payment["period"]
         expected = payment["expected_amount"]
+        paid_amount = payment["paid_amount"] or 0
+        remaining = expected - paid_amount
+        if payment["status"] == "paid" or paid_amount >= expected or remaining <= 0:
+            continue
+
+        period = payment["period"]
         candidate_names = [contract["tenant_name"]]
 
         period_movements = [m for m in movements_in_period if m["movement_date"][:7] == period]
@@ -120,24 +125,6 @@ def run_audit(period_from: str | None = None, period_to: str | None = None) -> d
                 summary["missing_payment"] += 1
             else:
                 skipped += 1
-
-    for m in movements_in_period:
-        if m["id"] in matched_movement_ids:
-            continue
-        ok = _safe_insert({
-            "finding_type": "unmatched_movement",
-            "contract_id": None,
-            "period": None,
-            "bank_movement_id": m["id"],
-            "expected_amount": None,
-            "candidate_amount": m["amount"],
-            "confidence": "low",
-        })
-        if ok:
-            created += 1
-            summary["unmatched_movement"] += 1
-        else:
-            skipped += 1
 
     return {
         "created": created,

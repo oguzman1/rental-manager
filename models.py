@@ -449,6 +449,15 @@ class BankStatementResponse(BaseModel):
     parsed_at: str | None = None
 
 
+class PaymentAuditCompletePaymentResponse(BaseModel):
+    finding_id: int
+    payment_id: int
+    payment_entry_id: int
+    amount: int
+    status: str
+    resolution_note: str
+
+
 class PaymentAuditRunRequest(BaseModel):
     period_from: str | None = None
     period_to: str | None = None

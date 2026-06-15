@@ -75,6 +75,7 @@ from models import (
     AdjustmentDismissResponse,
     BankMovementResponse,
     BankStatementResponse,
+    ContractAuditSummaryResponse,
     PaymentAuditCompletePaymentResponse,
     PaymentAuditFindingResponse,
     PaymentAuditResolveFindingRequest,
@@ -1493,6 +1494,19 @@ def run_payment_audit(body: PaymentAuditRunRequest):
     return payment_audit_engine.run_audit(
         period_from=body.period_from,
         period_to=body.period_to,
+    )
+
+
+@app.get(
+    "/payment-audit/contract-summary",
+    tags=["payment-audit"],
+    summary="Per-contract, per-month audit status for a period",
+    response_model=ContractAuditSummaryResponse,
+)
+def get_contract_audit_summary(period_from: str | None = None, period_to: str | None = None):
+    return payment_audit_engine.build_contract_summary(
+        period_from=period_from,
+        period_to=period_to,
     )
 
 

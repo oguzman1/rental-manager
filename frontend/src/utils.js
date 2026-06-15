@@ -71,6 +71,16 @@ export function formatPeriodLabel(period) {
   return `${MONTHS_ES[month - 1]} ${year}`
 }
 
+const MONTHS_ES_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+
+export function formatMonthShort(period) {
+  if (!period) return period
+  const [, monthStr] = period.split('-')
+  const month = Number(monthStr)
+  if (!month || month < 1 || month > 12) return period
+  return MONTHS_ES_SHORT[month - 1]
+}
+
 export function formatPeriod(period) {
   if (!period) return 'Sin período'
   const [year, month] = period.split('-').map(Number)

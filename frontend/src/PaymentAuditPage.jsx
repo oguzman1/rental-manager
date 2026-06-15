@@ -1,8 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import Topbar from './Topbar'
-import { formatCLP } from './utils'
+import { formatCLP, formatMonthShort } from './utils'
 
 const API_BASE = 'http://127.0.0.1:8000'
+
+const MONTH_STATUS_BADGE = {
+  matched_registered: 'badge-ok',
+  found_not_registered: 'badge-warn',
+  missing: 'badge-danger',
+}
+
+const OVERALL_STATUS_BADGE = {
+  matched_registered: 'badge-ok',
+  found_not_registered: 'badge-warn',
+  missing: 'badge-danger',
+  no_data: 'badge-muted',
+}
+
+const OVERALL_STATUS_LABEL = {
+  matched_registered: 'Al día',
+  found_not_registered: 'Por confirmar',
+  missing: 'Pagos faltantes',
+  no_data: 'Sin datos',
+}
 
 function _contractLabel(f) {
   return f.property_label ?? `Contrato #${f.contract_id}`
@@ -48,6 +68,10 @@ function PaymentAuditPage() {
   const [findingsError, setFindingsError] = useState(null)
   const [isRunningAudit, setIsRunningAudit] = useState(false)
   const [auditResult, setAuditResult] = useState(null)
+
+  const [contractSummary, setContractSummary] = useState(null)
+  const [contractSummaryError, setContractSummaryError] = useState(null)
+  const [isLoadingContractSummary, setIsLoadingContractSummary] = useState(false)
   const [completingId, setCompletingId] = useState(null)
   const [resolvingFindingId, setResolvingFindingId] = useState(null)
   const [resolvingUnmatchedId, setResolvingUnmatchedId] = useState(null)
@@ -89,6 +113,24 @@ function PaymentAuditPage() {
     } catch (err) {
       setFindingsError(`Error al cargar hallazgos: ${err.message}`)
       return []
+    }
+  }
+
+  async function loadContractSummary(period_from, period_to) {
+    setIsLoadingContractSummary(true)
+    try {
+      const params = new URLSearchParams()
+      if (period_from) params.set('period_from', period_from)
+      if (period_to) params.set('period_to', period_to)
+      const qs = params.toString()
+      const res = await fetch(`${API_BASE}/payment-audit/contract-summary${qs ? `?${qs}` : ''}`)
+      if (!res.ok) throw new Error(`Error ${res.status}`)
+      setContractSummary(await res.json())
+      setContractSummaryError(null)
+    } catch (err) {
+      setContractSummaryError(`Error al cargar resumen por contrato: ${err.message}`)
+    } finally {
+      setIsLoadingContractSummary(false)
     }
   }
 
@@ -138,6 +180,7 @@ function PaymentAuditPage() {
       }
       const result = await res.json()
       setAuditResult(result)
+      await loadContractSummary(period_from, period_to)
       const freshFindings = await loadFindings()
       const hasInconsistencias = freshFindings.some(
         (f) => f.finding_type === 'missing_payment' || f.finding_type === 'amount_mismatch'
@@ -259,6 +302,7 @@ function PaymentAuditPage() {
     loadStatements()
     loadMovements()
     loadFindings()
+    loadContractSummary()
   }, [])
 
   useEffect(() => {
@@ -328,7 +372,6 @@ function PaymentAuditPage() {
   }
 
   const totalMovements = statements.reduce((sum, s) => sum + (s.movements_count || 0), 0)
-  const latestStatements = statements.slice(0, 2)
   const pendingCount = statements.filter(
     (s) => s.status === 'uploaded' && s.original_filename.toLowerCase().endsWith('.xls')
   ).length
@@ -363,12 +406,10 @@ function PaymentAuditPage() {
                       Sin cartolas cargadas
                     </span>
                   ) : (
-                    latestStatements.map((s) => (
-                      <span className="badge badge-ok" key={s.id}>
-                        <span className="badge-dot" />
-                        {`✓ ${s.period_label ?? s.original_filename}`}
-                      </span>
-                    ))
+                    <span className="badge badge-ok">
+                      <span className="badge-dot" />
+                      {`${statements.length} cartola${statements.length === 1 ? '' : 's'} cargada${statements.length === 1 ? '' : 's'}`}
+                    </span>
                   )}
                 </div>
                 <input
@@ -517,9 +558,56 @@ function PaymentAuditPage() {
 
           <div className="detail-card">
             <h2 className="audit-section-title">Resumen por contrato</h2>
-            <p className="audit-col-text">
-              Resumen por contrato estará disponible cuando conectemos este bloque a datos reales.
-            </p>
+            {contractSummaryError && <div className="payment-form-error">{contractSummaryError}</div>}
+            {isLoadingContractSummary ? (
+              <p className="audit-col-text">Cargando resumen…</p>
+            ) : !contractSummary || contractSummary.contracts.length === 0 ? (
+              <p className="audit-col-text">No hay contratos activos para auditar.</p>
+            ) : (
+              <div className="table-wrapper">
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th className="th">Contrato / propiedad</th>
+                      <th className="th">Pagadores esperados</th>
+                      <th className="th">Meses auditados</th>
+                      <th className="th">Estado general</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {contractSummary.contracts.map((c) => (
+                      <tr key={c.contract_id}>
+                        <td className="td">{c.property_label ?? `Contrato #${c.contract_id}`}</td>
+                        <td className="td td-muted">{c.tenant_name ?? '—'}</td>
+                        <td className="td">
+                          <div className="audit-chip-row">
+                            {c.months.length === 0 ? (
+                              <span className="badge badge-muted">
+                                <span className="badge-dot" />
+                                Sin datos
+                              </span>
+                            ) : (
+                              c.months.map((m) => (
+                                <span className={`badge ${MONTH_STATUS_BADGE[m.status]}`} key={m.period}>
+                                  <span className="badge-dot" />
+                                  {formatMonthShort(m.period)}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </td>
+                        <td className="td">
+                          <span className={`badge ${OVERALL_STATUS_BADGE[c.overall_status]}`}>
+                            <span className="badge-dot" />
+                            {OVERALL_STATUS_LABEL[c.overall_status]}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="audit-section-header">

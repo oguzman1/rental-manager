@@ -6286,6 +6286,150 @@ def test_run_audit_produces_amount_mismatch():
     _cleanup_engine_movement(statement_id, movement_id)
 
 
+# --- GET /payment-audit/contract-summary --------------------------------------
+
+
+def test_contract_summary_returns_200_with_default_period():
+    r = client.get("/payment-audit/contract-summary")
+    assert r.status_code == 200
+    data = r.json()
+    assert "period_from" in data
+    assert "period_to" in data
+    assert "contracts" in data
+    assert isinstance(data["contracts"], list)
+
+
+def test_contract_summary_includes_active_contract_with_labels():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN ETIQUETA")
+    _insert_raw_payment(contract_id, "2096-01", status="pending")
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-01", "period_to": "2096-01"},
+    )
+    assert r.status_code == 200
+    contracts = r.json()["contracts"]
+    match = [c for c in contracts if c["contract_id"] == contract_id]
+    assert len(match) == 1
+    assert match[0]["tenant_name"] == "ARRENDATARIO RESUMEN ETIQUETA"
+    assert match[0]["property_label"]
+
+    _cleanup_engine_payments(contract_id)
+
+
+def test_contract_summary_marks_matched_registered_for_paid_payment_with_movement():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN PAGADO")
+    _insert_raw_payment(contract_id, "2096-02", paid_amount=600000, status="paid")
+    statement_id = _make_audit_statement("summary-paid")
+    movement_id = _make_audit_movement(
+        statement_id, "summary-paid", 600000,
+        "TRANSFERENCIA ARRENDATARIO RESUMEN PAGADO", "2096-02-05",
+    )
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-02", "period_to": "2096-02"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    assert contract["overall_status"] == "matched_registered"
+    assert contract["months"] == [{
+        "period": "2096-02",
+        "status": "matched_registered",
+        "expected_amount": 600000,
+        "paid_amount": 600000,
+    }]
+
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_contract_summary_marks_found_not_registered_for_pending_payment_with_movement():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN POR CONFIRMAR")
+    _insert_raw_payment(contract_id, "2096-03", status="pending")
+    statement_id = _make_audit_statement("summary-found")
+    movement_id = _make_audit_movement(
+        statement_id, "summary-found", 600000,
+        "TRANSFERENCIA ARRENDATARIO RESUMEN POR CONFIRMAR", "2096-03-05",
+    )
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-03", "period_to": "2096-03"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    assert contract["overall_status"] == "found_not_registered"
+    assert contract["months"][0]["status"] == "found_not_registered"
+
+    _cleanup_engine_payments(contract_id)
+    _cleanup_engine_movement(statement_id, movement_id)
+
+
+def test_contract_summary_marks_missing_for_pending_payment_without_movement():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN SIN ABONO")
+    _insert_raw_payment(contract_id, "2096-04", status="pending")
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-04", "period_to": "2096-04"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    assert contract["overall_status"] == "missing"
+    assert contract["months"][0]["status"] == "missing"
+
+    _cleanup_engine_payments(contract_id)
+
+
+def test_contract_summary_overall_status_is_the_worst_month():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN MIXTO")
+    _insert_raw_payment(contract_id, "2096-05", paid_amount=600000, status="paid")
+    _insert_raw_payment(contract_id, "2096-06", status="pending")
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-05", "period_to": "2096-06"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    assert contract["overall_status"] == "missing"
+    statuses = {m["period"]: m["status"] for m in contract["months"]}
+    assert statuses["2096-05"] == "matched_registered"
+    assert statuses["2096-06"] == "missing"
+
+    _cleanup_engine_payments(contract_id)
+
+
+def test_contract_summary_excludes_periods_without_payment_row():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN PARCIAL RANGO")
+    _insert_raw_payment(contract_id, "2096-08", status="pending")
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-07", "period_to": "2096-08"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    periods = [m["period"] for m in contract["months"]]
+    assert periods == ["2096-08"]
+
+    _cleanup_engine_payments(contract_id)
+
+
+def test_contract_summary_overall_status_no_data_when_no_payments_in_range():
+    contract_id = _make_audit_contract("ARRENDATARIO RESUMEN SIN DATOS")
+
+    r = client.get(
+        "/payment-audit/contract-summary",
+        params={"period_from": "2096-09", "period_to": "2096-09"},
+    )
+    assert r.status_code == 200
+    contract = next(c for c in r.json()["contracts"] if c["contract_id"] == contract_id)
+    assert contract["overall_status"] == "no_data"
+    assert contract["months"] == []
+
+
 def test_upload_parse_does_not_create_findings(monkeypatch):
     monkeypatch.setattr(_main, "parse_xls", _make_fake_parse_xls("no-findings-eng"))
 

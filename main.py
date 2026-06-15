@@ -49,6 +49,7 @@ from db import (
     complete_payment_from_audit_finding,
     list_payment_audit_findings,
     resolve_missing_payment_finding,
+    resolve_amount_mismatch_finding,
     resolve_unmatched_movement_finding,
     list_dashboard_items,
     list_managed_properties,
@@ -1573,6 +1574,13 @@ _RESOLVE_UNMATCHED_ERRORS: dict[str, tuple[int, str]] = {
     "note_required": (400, "resolution_note must not be blank."),
 }
 
+_RESOLVE_AMOUNT_MISMATCH_ERRORS: dict[str, tuple[int, str]] = {
+    "not_found": (404, "Finding not found."),
+    "not_open": (409, "Finding is not open."),
+    "not_amount_mismatch": (400, "Only amount_mismatch findings can be resolved here."),
+    "note_required": (400, "resolution_note must not be blank."),
+}
+
 
 @app.post(
     "/payment-audit/findings/{finding_id}/resolve-unmatched-movement",
@@ -1590,4 +1598,23 @@ def resolve_unmatched_movement_endpoint(finding_id: int, body: PaymentAuditResol
         return resolve_unmatched_movement_finding(finding_id, body.resolution_note)
     except ValueError as exc:
         status_code, detail = _RESOLVE_UNMATCHED_ERRORS.get(str(exc), (409, str(exc)))
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
+@app.post(
+    "/payment-audit/findings/{finding_id}/resolve-amount-mismatch",
+    tags=["payment-audit"],
+    summary="Resolve an amount_mismatch finding without payment mutation",
+    response_model=PaymentAuditFindingResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Wrong finding type or blank note"},
+        404: {"model": ErrorResponse, "description": "Finding not found"},
+        409: {"model": ErrorResponse, "description": "Finding is not open"},
+    },
+)
+def resolve_amount_mismatch_endpoint(finding_id: int, body: PaymentAuditResolveFindingRequest):
+    try:
+        return resolve_amount_mismatch_finding(finding_id, body.resolution_note)
+    except ValueError as exc:
+        status_code, detail = _RESOLVE_AMOUNT_MISMATCH_ERRORS.get(str(exc), (409, str(exc)))
         raise HTTPException(status_code=status_code, detail=detail)

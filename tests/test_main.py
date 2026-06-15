@@ -7187,3 +7187,363 @@ def test_run_audit_does_not_resolve_unmatched_movement_findings():
     assert finding["status"] == "open"
 
     _cleanup_unmatched(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /payment-audit/findings/{finding_id}/resolve-amount-mismatch
+# ──────────────────────────────────────────────────────────────────────────────
+
+_mismatch_seq = 0
+
+
+def _make_mismatch_contract(tenant_name: str) -> int:
+    global _mismatch_seq
+    _mismatch_seq += 1
+    rol = f"93001-{_mismatch_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "MISMATCH",
+                "rol": rol,
+                "address": f"Mismatch Calle {_mismatch_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": tenant_name})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "current_rent": 600000,
+        },
+    )
+    assert r.status_code == 200, r.json()
+    return r.json()["id"]
+
+
+def _make_mismatch_statement(suffix: str) -> int:
+    return _db.insert_bank_statement(
+        {
+            "bank": "banco_de_chile",
+            "original_filename": f"mismatch_test_{suffix}.xls",
+            "stored_path": f"uploads/cartolas/mismatch_test_{suffix}.xls",
+            "mime_type": "application/vnd.ms-excel",
+            "size_bytes": 100,
+            "file_hash": f"hash-mismatch-test-{suffix}",
+            "period_label": "2093-01",
+        }
+    )
+
+
+def _make_mismatch_movement(statement_id: int, suffix: str, amount: int = 400000) -> int:
+    return _db.insert_bank_movement(
+        {
+            "statement_id": statement_id,
+            "movement_date": "2093-01-10",
+            "description": f"TRANSFERENCIA MISMATCH {suffix}",
+            "amount": amount,
+            "balance_after": 8000000,
+            "dedup_key": f"dedup-mismatch-test-{suffix}",
+        }
+    )
+
+
+def _make_mismatch_finding(
+    contract_id: int,
+    period: str,
+    movement_id: int,
+    expected: int = 600000,
+    candidate: int = 400000,
+    status: str = "open",
+) -> int:
+    return _db.insert_payment_audit_finding(
+        {
+            "finding_type": "amount_mismatch",
+            "contract_id": contract_id,
+            "period": period,
+            "bank_movement_id": movement_id,
+            "expected_amount": expected,
+            "candidate_amount": candidate,
+            "confidence": "high",
+            "status": status,
+        }
+    )
+
+
+def _cleanup_mismatch(
+    *,
+    contract_id: int | None = None,
+    finding_id: int | None = None,
+    movement_id: int | None = None,
+    statement_id: int | None = None,
+):
+    with _db.get_connection() as conn:
+        if finding_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE id = ?", (finding_id,))
+        if movement_id is not None:
+            conn.execute("DELETE FROM bank_movements WHERE id = ?", (movement_id,))
+        if statement_id is not None:
+            conn.execute("DELETE FROM bank_statements WHERE id = ?", (statement_id,))
+        if contract_id is not None:
+            conn.execute("DELETE FROM payments WHERE contract_id = ?", (contract_id,))
+        conn.commit()
+
+
+_MISMATCH_URL = "/payment-audit/findings/{}/resolve-amount-mismatch"
+
+
+def test_resolve_amount_mismatch_returns_200():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH UNO")
+    _insert_raw_payment(contract_id, "2093-01", status="pending")
+    statement_id = _make_mismatch_statement("am-01")
+    movement_id = _make_mismatch_movement(statement_id, "am-01")
+    finding_id = _make_mismatch_finding(contract_id, "2093-01", movement_id)
+
+    r = client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Diferencia explicada"})
+    assert r.status_code == 200
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_updates_status_to_resolved():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH DOS")
+    _insert_raw_payment(contract_id, "2093-02", status="pending")
+    statement_id = _make_mismatch_statement("am-02")
+    movement_id = _make_mismatch_movement(statement_id, "am-02")
+    finding_id = _make_mismatch_finding(contract_id, "2093-02", movement_id)
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "resolved"
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_stores_resolution_note():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH TRES")
+    _insert_raw_payment(contract_id, "2093-03", status="pending")
+    statement_id = _make_mismatch_statement("am-03")
+    movement_id = _make_mismatch_movement(statement_id, "am-03")
+    finding_id = _make_mismatch_finding(contract_id, "2093-03", movement_id)
+
+    note = "Arrendatario pagó diferencia en efectivo"
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": note})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolution_note"] == note
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_sets_resolved_at():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH CUATRO")
+    _insert_raw_payment(contract_id, "2093-04", status="pending")
+    statement_id = _make_mismatch_statement("am-04")
+    movement_id = _make_mismatch_movement(statement_id, "am-04")
+    finding_id = _make_mismatch_finding(contract_id, "2093-04", movement_id)
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolved_at"] is not None
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_not_found_returns_404():
+    r = client.post(_MISMATCH_URL.format(999999999), json={"resolution_note": "Revisado"})
+    assert r.status_code == 404
+
+
+def test_resolve_amount_mismatch_not_open_returns_409():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH CINCO")
+    _insert_raw_payment(contract_id, "2093-06", status="pending")
+    statement_id = _make_mismatch_statement("am-06")
+    movement_id = _make_mismatch_movement(statement_id, "am-06")
+    finding_id = _make_mismatch_finding(contract_id, "2093-06", movement_id, status="resolved")
+
+    r = client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 409
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_wrong_type_returns_400():
+    statement_id = _make_mismatch_statement("am-07")
+    movement_id = _make_mismatch_movement(statement_id, "am-07")
+    finding_id = _make_unmatched_finding(movement_id)
+
+    r = client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 400
+
+    _cleanup_mismatch(finding_id=finding_id, movement_id=movement_id, statement_id=statement_id)
+
+
+def test_resolve_amount_mismatch_empty_note_returns_400():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH OCHO")
+    _insert_raw_payment(contract_id, "2093-08", status="pending")
+    statement_id = _make_mismatch_statement("am-08")
+    movement_id = _make_mismatch_movement(statement_id, "am-08")
+    finding_id = _make_mismatch_finding(contract_id, "2093-08", movement_id)
+
+    r = client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "  "})
+    assert r.status_code == 400
+
+    r2 = client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": ""})
+    assert r2.status_code == 400
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_does_not_mutate_payments():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH NUEVE")
+    _insert_raw_payment(contract_id, "2093-09", status="pending")
+    statement_id = _make_mismatch_statement("am-09")
+    movement_id = _make_mismatch_movement(statement_id, "am-09")
+    finding_id = _make_mismatch_finding(contract_id, "2093-09", movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, "2093-09"),
+        ).fetchone()
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, "2093-09"),
+        ).fetchone()
+    assert after == before
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_does_not_mutate_payment_entries():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH DIEZ")
+    _insert_raw_payment(contract_id, "2093-10", status="pending")
+    statement_id = _make_mismatch_statement("am-10")
+    movement_id = _make_mismatch_movement(statement_id, "am-10")
+    finding_id = _make_mismatch_finding(contract_id, "2093-10", movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_does_not_mutate_payment_deductions():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH ONCE")
+    _insert_raw_payment(contract_id, "2093-11", status="pending")
+    statement_id = _make_mismatch_statement("am-11")
+    movement_id = _make_mismatch_movement(statement_id, "am-11")
+    finding_id = _make_mismatch_finding(contract_id, "2093-11", movement_id)
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+    assert after == before
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_resolve_amount_mismatch_does_not_mutate_bank_movements():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH DOCE")
+    _insert_raw_payment(contract_id, "2093-12", status="pending")
+    statement_id = _make_mismatch_statement("am-12")
+    movement_id = _make_mismatch_movement(statement_id, "am-12")
+    finding_id = _make_mismatch_finding(contract_id, "2093-12", movement_id)
+
+    with _db.get_connection() as conn:
+        before_count = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+        before_matched = conn.execute(
+            "SELECT matched_payment_id FROM bank_movements WHERE id = ?", (movement_id,)
+        ).fetchone()[0]
+
+    client.post(_MISMATCH_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after_count = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+        after_matched = conn.execute(
+            "SELECT matched_payment_id FROM bank_movements WHERE id = ?", (movement_id,)
+        ).fetchone()[0]
+    assert after_count == before_count
+    assert after_matched == before_matched
+
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )
+
+
+def test_run_audit_does_not_resolve_amount_mismatch_findings():
+    contract_id = _make_mismatch_contract("INQUILINO MISMATCH TRECE")
+    _insert_raw_payment(contract_id, "2093-05", status="pending")
+    statement_id = _make_mismatch_statement("am-13")
+    movement_id = _make_mismatch_movement(statement_id, "am-13")
+    finding_id = _make_mismatch_finding(contract_id, "2093-05", movement_id)
+
+    client.post("/payment-audit/run", json={"period_from": "2093-05", "period_to": "2093-05"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "open"
+
+    _cleanup_engine_findings(contract_id=contract_id, movement_id=movement_id)
+    _cleanup_mismatch(
+        contract_id=contract_id, finding_id=finding_id,
+        movement_id=movement_id, statement_id=statement_id,
+    )

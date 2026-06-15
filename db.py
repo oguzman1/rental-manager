@@ -3031,6 +3031,28 @@ def resolve_unmatched_movement_finding(finding_id: int, resolution_note: str) ->
     return get_payment_audit_finding(finding_id)
 
 
+def resolve_amount_mismatch_finding(finding_id: int, resolution_note: str) -> dict:
+    """Resolve an amount_mismatch finding without touching any payment table.
+
+    Only updates payment_audit_findings. Does not write to payments,
+    payment_entries, payment_deductions, or bank_movements.
+    """
+    finding = get_payment_audit_finding(finding_id)
+    if finding is None:
+        raise ValueError("not_found")
+    if finding["status"] != "open":
+        raise ValueError("not_open")
+    if finding["finding_type"] != "amount_mismatch":
+        raise ValueError("not_amount_mismatch")
+    if not resolution_note or not resolution_note.strip():
+        raise ValueError("note_required")
+
+    mark_payment_audit_finding_resolved(
+        finding_id, status="resolved", resolution_note=resolution_note.strip()
+    )
+    return get_payment_audit_finding(finding_id)
+
+
 def complete_payment_from_audit_finding(finding_id: int) -> dict:
     """Atomically complete a payment from a match_found audit finding.
 

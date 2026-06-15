@@ -449,6 +449,10 @@ class BankStatementResponse(BaseModel):
     parsed_at: str | None = None
 
 
+class PaymentAuditResolveFindingRequest(BaseModel):
+    resolution_note: str
+
+
 class PaymentAuditCompletePaymentResponse(BaseModel):
     finding_id: int
     payment_id: int

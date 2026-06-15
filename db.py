@@ -2987,6 +2987,28 @@ def mark_payment_audit_finding_resolved(
     return cursor.rowcount > 0
 
 
+def resolve_missing_payment_finding(finding_id: int, resolution_note: str) -> dict:
+    """Resolve a missing_payment finding without touching any payment table.
+
+    Only updates payment_audit_findings. Does not write to payments,
+    payment_entries, payment_deductions, or bank_movements.
+    """
+    finding = get_payment_audit_finding(finding_id)
+    if finding is None:
+        raise ValueError("not_found")
+    if finding["status"] != "open":
+        raise ValueError("not_open")
+    if finding["finding_type"] != "missing_payment":
+        raise ValueError("not_missing_payment")
+    if not resolution_note or not resolution_note.strip():
+        raise ValueError("note_required")
+
+    mark_payment_audit_finding_resolved(
+        finding_id, status="resolved", resolution_note=resolution_note.strip()
+    )
+    return get_payment_audit_finding(finding_id)
+
+
 def complete_payment_from_audit_finding(finding_id: int) -> dict:
     """Atomically complete a payment from a match_found audit finding.
 

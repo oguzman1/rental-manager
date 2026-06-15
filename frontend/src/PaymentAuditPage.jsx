@@ -115,6 +115,7 @@ function PaymentAuditPage() {
   const [isRunningAudit, setIsRunningAudit] = useState(false)
   const [auditResult, setAuditResult] = useState(null)
   const [completingId, setCompletingId] = useState(null)
+  const [resolvingFindingId, setResolvingFindingId] = useState(null)
 
   const visibleRows = onlyDifferences
     ? CONTRACT_ROWS.filter((row) => row.hasDifference)
@@ -200,6 +201,32 @@ function PaymentAuditPage() {
       setFindingsError(`Error al completar pago: ${err.message}`)
     } finally {
       setCompletingId(null)
+    }
+  }
+
+  async function handleResolveMissingPayment(finding) {
+    const note = window.prompt('Nota para resolver este pago no encontrado:')
+    if (!note || !note.trim()) return
+    setResolvingFindingId(finding.id)
+    setFindingsError(null)
+    try {
+      const res = await fetch(
+        `${API_BASE}/payment-audit/findings/${finding.id}/resolve-missing-payment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resolution_note: note.trim() }),
+        }
+      )
+      if (!res.ok) {
+        const body = await res.json()
+        throw new Error(body.detail ?? `Error ${res.status}`)
+      }
+      await loadFindings()
+    } catch (err) {
+      setFindingsError(`Error al marcar revisado: ${err.message}`)
+    } finally {
+      setResolvingFindingId(null)
     }
   }
 
@@ -604,6 +631,22 @@ function PaymentAuditPage() {
                           <span className="badge badge-ok">
                             <span className="badge-dot" />
                             Completado
+                          </span>
+                        )
+                      )}
+                      {activeTab === 'inconsistencias' && f.finding_type === 'missing_payment' && (
+                        f.status === 'open' ? (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleResolveMissingPayment(f)}
+                            disabled={resolvingFindingId === f.id}
+                          >
+                            {resolvingFindingId === f.id ? 'Guardando…' : 'Marcar revisado'}
+                          </button>
+                        ) : (
+                          <span className="badge badge-ok">
+                            <span className="badge-dot" />
+                            Revisado
                           </span>
                         )
                       )}

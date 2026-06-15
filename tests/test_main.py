@@ -6664,3 +6664,271 @@ def test_complete_payment_returns_required_response_fields():
     _cleanup_complete(
         contract_id=contract_id, movement_id=movement_id, statement_id=statement_id, finding_id=finding_id
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# POST /payment-audit/findings/{finding_id}/resolve-missing-payment
+# ──────────────────────────────────────────────────────────────────────────────
+
+_resolve_seq = 0
+
+
+def _make_resolve_contract(tenant_name: str) -> int:
+    """Create an active contract for resolve-missing tests. ROL prefix 96001-."""
+    global _resolve_seq
+    _resolve_seq += 1
+    rol = f"96001-{_resolve_seq:05d}"
+
+    client.post(
+        "/managed-property",
+        json={
+            "property": {
+                "comuna": "RESOLVE",
+                "rol": rol,
+                "address": f"Resolve Calle {_resolve_seq}",
+                "destination": "HABITACIONAL",
+                "status": "vacant",
+            },
+            "rental": None,
+        },
+    )
+    props = client.get("/managed-properties").json()
+    prop = next(p for p in props if p["rol"] == rol)
+
+    r = client.post("/tenants", json={"display_name": tenant_name})
+    tenant_id = r.json()["id"]
+
+    r = client.post(
+        "/contracts",
+        json={
+            "property_id": prop["id"],
+            "tenant_id": tenant_id,
+            "start_date": "2024-01-01",
+            "payment_day": 5,
+            "notice_days": 30,
+            "adjustment_frequency": "annual",
+            "current_rent": 600000,
+        },
+    )
+    assert r.status_code == 200, r.json()
+    return r.json()["id"]
+
+
+def _make_resolve_missing_finding(
+    contract_id: int, period: str, status: str = "open"
+) -> int:
+    return _db.insert_payment_audit_finding(
+        {
+            "finding_type": "missing_payment",
+            "contract_id": contract_id,
+            "period": period,
+            "bank_movement_id": None,
+            "expected_amount": 600000,
+            "candidate_amount": None,
+            "confidence": "high",
+            "status": status,
+        }
+    )
+
+
+def _cleanup_resolve(*, contract_id: int | None = None, finding_id: int | None = None):
+    with _db.get_connection() as conn:
+        if finding_id is not None:
+            conn.execute("DELETE FROM payment_audit_findings WHERE id = ?", (finding_id,))
+        if contract_id is not None:
+            conn.execute("DELETE FROM payments WHERE contract_id = ?", (contract_id,))
+        conn.commit()
+
+
+_RESOLVE_URL = "/payment-audit/findings/{}/resolve-missing-payment"
+
+
+def test_resolve_missing_payment_returns_200():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE UNO")
+    _insert_raw_payment(contract_id, "2096-01", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-01")
+
+    r = client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Verificado manualmente"})
+    assert r.status_code == 200
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_updates_status_to_resolved():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE DOS")
+    _insert_raw_payment(contract_id, "2096-02", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-02")
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "resolved"
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_stores_resolution_note():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE TRES")
+    _insert_raw_payment(contract_id, "2096-03", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-03")
+
+    note = "Pago recibido por otro medio"
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": note})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolution_note"] == note
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_sets_resolved_at():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE CUATRO")
+    _insert_raw_payment(contract_id, "2096-04", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-04")
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["resolved_at"] is not None
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_not_found_returns_404():
+    r = client.post(_RESOLVE_URL.format(999999999), json={"resolution_note": "Revisado"})
+    assert r.status_code == 404
+
+
+def test_resolve_missing_payment_not_open_returns_409():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE CINCO")
+    _insert_raw_payment(contract_id, "2096-05", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-05", status="resolved")
+
+    r = client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 409
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_wrong_type_returns_400():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE SEIS")
+    _insert_raw_payment(contract_id, "2096-06", status="pending")
+    finding_id = _db.insert_payment_audit_finding(
+        {
+            "finding_type": "match_found",
+            "contract_id": contract_id,
+            "period": "2096-06",
+            "bank_movement_id": 999111001,
+            "expected_amount": 600000,
+            "candidate_amount": 600000,
+            "confidence": "high",
+            "status": "open",
+        }
+    )
+
+    r = client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+    assert r.status_code == 400
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_empty_note_returns_400():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE SIETE")
+    _insert_raw_payment(contract_id, "2096-07", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-07")
+
+    r = client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "  "})
+    assert r.status_code == 400
+
+    r2 = client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": ""})
+    assert r2.status_code == 400
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_does_not_mutate_payments():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE OCHO")
+    _insert_raw_payment(contract_id, "2096-08", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-08")
+
+    with _db.get_connection() as conn:
+        before = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, "2096-08"),
+        ).fetchone()
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute(
+            "SELECT paid_amount, status FROM payments WHERE contract_id = ? AND period = ?",
+            (contract_id, "2096-08"),
+        ).fetchone()
+    assert after == before
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_does_not_mutate_payment_entries():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE NUEVE")
+    _insert_raw_payment(contract_id, "2096-09", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-09")
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_entries").fetchone()[0]
+    assert after == before
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_does_not_mutate_payment_deductions():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE DIEZ")
+    _insert_raw_payment(contract_id, "2096-10", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-10")
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM payment_deductions").fetchone()[0]
+    assert after == before
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_resolve_missing_payment_does_not_mutate_bank_movements():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE ONCE")
+    _insert_raw_payment(contract_id, "2096-11", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-11")
+
+    with _db.get_connection() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+
+    client.post(_RESOLVE_URL.format(finding_id), json={"resolution_note": "Revisado"})
+
+    with _db.get_connection() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM bank_movements").fetchone()[0]
+    assert after == before
+
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)
+
+
+def test_run_audit_does_not_resolve_missing_payment_findings():
+    contract_id = _make_resolve_contract("INQUILINO RESOLVE DOCE")
+    _insert_raw_payment(contract_id, "2096-12", status="pending")
+    finding_id = _make_resolve_missing_finding(contract_id, "2096-12")
+
+    client.post("/payment-audit/run", json={"period_from": "2096-12", "period_to": "2096-12"})
+
+    finding = _db.get_payment_audit_finding(finding_id)
+    assert finding["status"] == "open"
+
+    _cleanup_engine_findings(contract_id=contract_id)
+    _cleanup_resolve(contract_id=contract_id, finding_id=finding_id)

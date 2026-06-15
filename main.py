@@ -48,6 +48,7 @@ from db import (
     list_contracts,
     complete_payment_from_audit_finding,
     list_payment_audit_findings,
+    resolve_missing_payment_finding,
     list_dashboard_items,
     list_managed_properties,
     list_payments_for_contract,
@@ -74,6 +75,7 @@ from models import (
     BankStatementResponse,
     PaymentAuditCompletePaymentResponse,
     PaymentAuditFindingResponse,
+    PaymentAuditResolveFindingRequest,
     PaymentAuditRunRequest,
     PaymentAuditRunResponse,
     ContractCloseRequest,
@@ -1533,4 +1535,31 @@ def complete_payment_endpoint(finding_id: int):
         return complete_payment_from_audit_finding(finding_id)
     except ValueError as exc:
         status_code, detail = _COMPLETE_PAYMENT_ERRORS.get(str(exc), (409, str(exc)))
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
+_RESOLVE_MISSING_ERRORS: dict[str, tuple[int, str]] = {
+    "not_found": (404, "Finding not found."),
+    "not_open": (409, "Finding is not open."),
+    "not_missing_payment": (400, "Only missing_payment findings can be resolved here."),
+    "note_required": (400, "resolution_note must not be blank."),
+}
+
+
+@app.post(
+    "/payment-audit/findings/{finding_id}/resolve-missing-payment",
+    tags=["payment-audit"],
+    summary="Resolve a missing_payment finding without payment mutation",
+    response_model=PaymentAuditFindingResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Wrong finding type or blank note"},
+        404: {"model": ErrorResponse, "description": "Finding not found"},
+        409: {"model": ErrorResponse, "description": "Finding is not open"},
+    },
+)
+def resolve_missing_payment_endpoint(finding_id: int, body: PaymentAuditResolveFindingRequest):
+    try:
+        return resolve_missing_payment_finding(finding_id, body.resolution_note)
+    except ValueError as exc:
+        status_code, detail = _RESOLVE_MISSING_ERRORS.get(str(exc), (409, str(exc)))
         raise HTTPException(status_code=status_code, detail=detail)
